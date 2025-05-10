@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>📊 Informe Mensual VIP</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #0e0e0e;
+      color: #f1c40f;
+      padding: 20px;
+    }
+
+    h1, h2 {
+      text-align: center;
+      color: #f1c40f;
+      margin-bottom: 30px;
+    }
+
+    .resumen {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-bottom: 50px;
+    }
+
+    .card {
+      background: #1a1a1a;
+      margin: 12px;
+      padding: 20px;
+      border-radius: 14px;
+      box-shadow: 0 0 10px rgba(241, 196, 15, 0.5);
+      width: 220px;
+      text-align: center;
+    }
+
+    .card h2 {
+      margin: 0;
+      font-size: 24px;
+      color: #f39c12;
+    }
+
+    .card p {
+      font-size: 16px;
+      margin-top: 8px;
+      color: #ffffff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 30px;
+    }
+
+    th, td {
+      padding: 10px;
+      text-align: center;
+      border: 1px solid #f1c40f;
+      color: #f1c40f;
+    }
+
+    th {
+      background-color: #1e1e1e;
+      font-weight: bold;
+    }
+
+    tr:nth-child(even) {
+      background-color: #121212;
+    }
+
+    tr:nth-child(odd) {
+      background-color: #1a1a1a;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 40px;
+      font-style: italic;
+      color: #bdc3c7;
+    }
+  </style>
+</head>
+<body>
+  <h1>👑 Informe Mensual de Trading - {periodo}</h1>
+
+  <div class="resumen">
+    <div class="card">
+      <h2>🧾 {total_ops}</h2>
+      <p>Operaciones Totales</p>
+    </div>
+    <div class="card">
+      <h2>✅ {ganadas}</h2>
+      <p>Ganadas</p>
+    </div>
+    <div class="card">
+      <h2>❌ {perdidas}</h2>
+      <p>Perdidas</p>
+    </div>
+    <div class="card">
+      <h2>📈 {win_rate:.2f}%</h2>
+      <p>Win Rate</p>
+    </div>
+    <div class="card">
+      <h2>💰 {pnl_total:.2f} USD</h2>
+      <p>PNL Neto</p>
+    </div>
+    <div class="card">
+      <h2>💸 {comisiones:.2f} USD</h2>
+      <p>Comisiones</p>
+    </div>
+  </div>
+
+  <h2>📋 Detalle de Operaciones</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>📈 Tipo</th>
+        <th>📊 Activo</th>
+        <th>💵 Entrada</th>
+        <th>🏁 Salida</th>
+        <th>🎯 Resultado</th>
+        <th>💰 PnL</th>
+        <th>💸 Comisión</th>
+        <th>📦 Qty</th>
+        <th>⏱ Entrada</th>
+        <th>⏱ Salida</th>
+      </tr>
+    </thead>
+    <tbody>
+      {filas}
+    </tbody>
+  </table>
+
+  <footer>⚙️ Informe generado automáticamente por tu bot de trading premium 🤖 | Estilo VIP 🖤💛</footer>
+</body>
+</html>

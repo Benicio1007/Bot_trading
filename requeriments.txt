@@ -1,0 +1,17 @@
+pandas
+numpy
+xgboost
+scikit-learn
+ccxt
+streamlit
+plotly
+requests
+smtplib
+email-validator
+python-telegram-bot==20.7
+flask
+gspread
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+oauth2client
