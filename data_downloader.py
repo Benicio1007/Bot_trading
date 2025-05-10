@@ -1,52 +1,41 @@
-import streamlit as st
+import ccxt
 import pandas as pd
-import plotly.express as px
+import os
+import time
+from datetime import datetime
 
-st.title("📈 Backtest Visual - BTCUSDT 5m")
+# Configuración
+symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT']
+interval = '5m'
+limit = 1000  # Binance solo deja 1000 velas por request
+total_candles = 100_000
+exchange = ccxt.binance()
+save_dir = "data"
+os.makedirs(save_dir, exist_ok=True)
 
-@st.cache_data
-def cargar_datos():
-    df = pd.read_csv("operaciones.csv")
-    df["Ganancia"] = df["pnl"]
-    return df
+def fetch_ohlcv(symbol, interval, since):
+    try:
+        return exchange.fetch_ohlcv(symbol, timeframe=interval, since=since)
+    except Exception as e:
+        print(f"❌ Error al descargar {symbol}: {e}")
+        return []
 
-df = cargar_datos()
+for symbol in symbols:
+    print(f"📥 Descargando {symbol}...")
+    all_candles = []
+    since = exchange.parse8601('2023-01-01T00:00:00Z')
+    
+    while len(all_candles) < total_candles:
+        candles = fetch_ohlcv(symbol, interval, since)
+        if not candles:
+            break
+        all_candles.extend(candles)
+        since = candles[-1][0] + 1
+        print(f"✅ {len(all_candles)} velas descargadas de {symbol}")
+        time.sleep(1)
 
-if df.empty:
-    st.warning("El archivo 'operaciones.csv' está vacío.")
-    st.stop()
-
-# Métricas
-st.header("📊 Métricas Generales")
-ganadoras = df[df["Ganancia"] > 0]
-perdedoras = df[df["Ganancia"] <= 0]
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Operaciones", len(df))
-col2.metric("Ganadoras", len(ganadoras))
-col3.metric("Perdedoras", len(perdedoras))
-
-win_rate = len(ganadoras) / len(df) * 100
-st.metric("Win Rate", f"{win_rate:.2f}%")
-
-# Evolución del capital
-st.header("💰 Evolución del Capital")
-capital = 1000
-capitales = []
-for g in df["Ganancia"]:
-    capital += g
-    capitales.append(capital)
-df["Capital"] = capitales
-df["Operación"] = df.index + 1
-
-fig = px.line(df, x="Operación", y="Capital", title="Evolución del Capital")
-st.plotly_chart(fig, use_container_width=True)
-
-# Barras de ganancias
-st.header("📊 Ganancia por operación")
-fig2 = px.bar(df, x="Operación", y="Ganancia", color="type", title="Resultado por operación")
-st.plotly_chart(fig2, use_container_width=True)
-
-# Mostrar tabla
-with st.expander("📋 Tabla de operaciones"):
-    st.dataframe(df)
+    df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    filename = os.path.join(save_dir, f"{symbol.replace('/', '')}_{interval}.csv")
+    df.to_csv(filename, index=False)
+    print(f"💾 Guardado en {filename}")
