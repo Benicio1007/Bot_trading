@@ -1,0 +1,102 @@
+data:
+  inputs:
+    # BTC
+    - symbol: BTCUSDT
+      timeframe: 1
+      path: data/BTCUSDT_1m.csv
+    - symbol: BTCUSDT
+      timeframe: 1
+      path: data/BTCUSDT_1m_1674031140001.csv
+    - symbol: BTCUSDT
+      timeframe: 5
+      path: data/BTCUSDT_5m.csv
+    - symbol: BTCUSDT
+      timeframe: 5
+      path: data/BTCUSDT_5m_1680035700001.csv
+
+    # ETH
+    - symbol: ETHUSDT
+      timeframe: 1
+      path: data/ETHUSDT_1m.csv
+    - symbol: ETHUSDT
+      timeframe: 1
+      path: data/ETHUSDT_1m_1674031140001.csv
+    - symbol: ETHUSDT
+      timeframe: 5
+      path: data/ETHUSDT_5m.csv
+    - symbol: ETHUSDT
+      timeframe: 5
+      path: data/ETHUSDT_5m_1680035700001.csv
+
+    # SOL
+    - symbol: SOLUSDT
+      timeframe: 1
+      path: data/SOLUSDT_1m.csv
+    - symbol: SOLUSDT
+      timeframe: 1
+      path: data/SOLUSDT_1m_1674031140001.csv
+    - symbol: SOLUSDT
+      timeframe: 5
+      path: data/SOLUSDT_5m.csv
+    - symbol: SOLUSDT
+      timeframe: 5
+      path: data/SOLUSDT_5m_1680035700001.csv
+
+    # XRP
+    - symbol: XRPUSDT
+      timeframe: 1
+      path: data/XRPUSDT_1m.csv
+    - symbol: XRPUSDT
+      timeframe: 1
+      path: data/XRPUSDT_1m_1674031140001.csv
+    - symbol: XRPUSDT
+      timeframe: 5
+      path: data/XRPUSDT_5m.csv
+    - symbol: XRPUSDT
+      timeframe: 5
+      path: data/XRPUSDT_5m_1680035700001.csv
+
+  features:
+    - "open"
+    - "high"
+    - "low"
+    - "close"
+    - "volume"
+    - "rsi"
+    - "macd"
+    - "macd_signal"
+    - "macd_hist"
+    - "ema_10"
+    - "ema_50"
+    - "atr"
+    - "obv"
+    - "stochastic_k"
+    - "stochastic_d"
+    - "bollinger_upper"
+    - "bollinger_lower"
+    - "adx"
+    - "hour"
+    - "candle_type"
+    - "close_change_1"
+    - "close_change_3"
+    - "close_change_5"
+    - "symbol_code"
+    - "timeframe_code"
+
+  sequence_length: 60
+
+training:
+  epochs: 20
+  batch_size: 64
+  learning_rate: 0.00005
+  device: "cpu"
+
+model:
+  cnn_out_channels: 32
+  lstm_hidden_size: 64
+  lstm_layers: 2
+  attention_heads: 4
+  dropout: 0.2
+
+rl_agent:
+  type: "ppo"  # "ppo", "ddpg", "sac"

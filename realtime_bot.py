@@ -8,7 +8,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import csv
 import os
-import requests
 import socket
 import telegram_utils.pnl_telegram as state
 from telegram_utils import telegram_bot
