@@ -55,19 +55,29 @@ data:
     - "liquidy_gap"
 
   sequence_length: 60
-
 training:
-  epochs: 40
+  optimizer: AdamW
+  learning_rate: 0.0005
+  loss_function: BCEWithLogitsLoss  # con class_weights si están disponibles
   batch_size: 64
-  learning_rate: 0.0001
-  device: "cpu"
+  epochs: 30
+  scheduler:
+    type: CosineAnnealingLR
+    T_max: 30
+  device: "cpu"  # o "cuda" si usas GPU
 
 model:
+  architecture: "CNN-LSTM-Attention"
   cnn_out_channels: 32
   lstm_hidden_size: 64
-  lstm_layers: 2
+  lstm_layers: 3
   attention_heads: 4
   dropout: 0.2
+  sequence_length: 60
+  input_features: 28  # se calcula según tu lista de features arriba
+  output_size: 1  # binary classification (buy/sell signal)
 
 rl_agent:
-  type: "ppo"  # "ppo", "ddpg", "sac"
+  type: "ppo"  # Options: "ppo", "ddpg", "sac"
+
+
