@@ -9,11 +9,12 @@ from data.modelos.drl_agent import PPOAgent
 from data.training.utils import CustomDataset, load_config
 import csv
 from pathlib import Path
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+
 
 def main():
     config = load_config("data/config/config.yaml")
     device = torch.device(config['training']['device'])
-
     dataset = CustomDataset(config)
     print(dataset.X.shape)
     config['data']['features'] = list(range(dataset.X.shape[2]))
@@ -53,7 +54,7 @@ def main():
             writer.writerow(["Epoch", "Loss", "WinRate"])
     
     best_loss = float('inf')
-    patience = 3  # cantidad de épocas sin mejora antes de parar
+    patience = 10  # cantidad de épocas sin mejora antes de parar
     patience_counter = 0
 
     # Entrenamiento
@@ -61,10 +62,10 @@ def main():
         total_correct = 0
         total_samples = 0
         losses = []
-
+        all_preds = []
+        all_labels = []
         for X, y in dataloader:
             X, y = X.to(device), y.to(device)
-
             features = feature_extractor(X)
             sequence = sequence_model(features)
             context = attention(sequence)
@@ -76,16 +77,18 @@ def main():
             optimizer.step()
             losses.append(loss.item())
 
-            # Calcular win rate
-            predicted_direction = torch.argmax(action_probs, dim=1).float()
-            true_direction = y.float() # Precio baja o sube
-            correct = (predicted_direction == true_direction).sum().item()
+            predicted = torch.argmax(action_probs, dim=1).float()
+            correct = (predicted == y.float()).sum().item()
             total_correct += correct
             total_samples += len(y)
 
-        avg_loss = sum(losses) / len(losses)
-        win_rate = total_correct / total_samples
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(y.cpu().numpy())
         
+        avg_loss = sum(losses) / len(losses)
+        win_rate = total_correct / total_samples  # esto es lo que ya mostrabas y se mantiene
+
+        # Guardar mejor modelo si mejora el loss
         if avg_loss < best_loss:
             best_loss = avg_loss
             patience_counter = 0
@@ -109,7 +112,26 @@ def main():
             writer = csv.writer(file)
             writer.writerow([epoch + 1, avg_loss, win_rate])
 
-        # Guardar checkpoint cada 5 épocas o al final
+        # 🔍 Mostrar métricas detalladas cada 2 épocas (cambiá el 2 si querés otro intervalo)
+        if (epoch + 1) % 2 == 0:
+            accuracy = accuracy_score(all_labels, all_preds)
+            precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+            recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+            f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+            cm = confusion_matrix(all_labels, all_preds)
+
+            print(f"\n📈 Métricas adicionales en época {epoch + 1}:")
+            print(f"   Accuracy:  {accuracy:.4f}")
+            print(f"   Precision: {precision:.4f}")
+            print(f"   Recall:    {recall:.4f}")
+            print(f"   F1 Score:  {f1:.4f}")
+            print("   Matriz de confusión:")
+            print(cm)
+
+        # ✅ Imprimir resultado cada época (esto no cambia)
+        print(f"📊 Epoch {epoch+1}: Loss = {avg_loss:.4f}, Win Rate = {win_rate:.2%}")
+
+        # Guardar cada 2 épocas o al final
         if (epoch + 1) % 2 == 0 or (epoch + 1) == config['training']['epochs']:
             torch.save({
                 'epoch': epoch,
@@ -120,8 +142,6 @@ def main():
                 'optimizer': optimizer.state_dict()
             }, checkpoint_path)
             print(f"💾 Checkpoint guardado en época {epoch + 1}")
-
-        print(f"📊 Epoch {epoch+1}: Loss = {avg_loss:.4f}, Win Rate = {win_rate:.2%}")
 
 if __name__ == "__main__":
     main()

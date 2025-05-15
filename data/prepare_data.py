@@ -2,8 +2,10 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
 import ta
 from tqdm import tqdm
+from collections import Counter
 
 class TradingDataset(Dataset):
     def __init__(self, data, sequence_length=60):
@@ -16,8 +18,10 @@ class TradingDataset(Dataset):
         for i in range(len(self.data) - self.sequence_length - 1):
             seq = self.data[i:i+self.sequence_length]
             close_now = self.data[i+self.sequence_length - 1][3]  # close actual
-            close_next = self.data[i+self.sequence_length][3]     # close futuro
-            direction = 1 if close_next > close_now else 0
+            future_prices = [self.data[i+self.sequence_length + j][3] for j in range(3)]  # próximos 3
+            direction = 1 if max(future_prices) > close_now * 1.002 else 0 if min(future_prices) < close_now * 0.998 else None
+            if direction is None:
+                continue  
             X.append(seq)
             y.append(direction)
         return np.array(X), np.array(y)
@@ -79,6 +83,9 @@ def compute_indicators(df):
     df['close_change_3'] = df['close'].pct_change(3)
     df['close_change_5'] = df['close'].pct_change(5)
 
+    df['volume_change'] = df['volume'].pct_change().fillna(0)
+    df['liquidity_gap'] = (df['high'] - df['low']) / df['close']
+
 
     return df
 
@@ -138,7 +145,8 @@ def create_dataset(config):
 
         # Normalizar (excepto symbol_code)
         numeric_cols = [col for col in df_final.columns if col != 'symbol_code']
-        df_final[numeric_cols] = (df_final[numeric_cols] - df_final[numeric_cols].mean()) / df_final[numeric_cols].std()
+        df_final[numeric_cols] = (df_final[numeric_cols] - df_final[numeric_cols].rolling(100).mean()) / df_final[numeric_cols].rolling(100).std()
+        df_final = df_final.dropna()  # asegurate de limpiar NaNs resultantes
 
         combined_data.append(df_final.values)
 
@@ -146,4 +154,25 @@ def create_dataset(config):
     all_data = np.concatenate(combined_data, axis=0)
     dataset = TradingDataset(all_data, sequence_length)
     num_features = all_data.shape[1]
-    return dataset, num_features
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+        
+    labels = dataset.y
+    counts = Counter(labels)
+    min_count = min(counts.values())
+    indices_0 = [i for i, y in enumerate(labels) if y == 0]
+    indices_1 = [i for i, y in enumerate(labels) if y == 1]
+    balanced_indices = indices_0[:min_count] + indices_1[:min_count]
+    np.random.shuffle(balanced_indices)
+    dataset.X = dataset.X[balanced_indices]
+    dataset.y = dataset.y[balanced_indices]
+    unique, counts = np.unique(labels, return_counts=True)
+    total = sum(counts)
+    weights = [total / c for c in counts]
+    class_weights = torch.tensor(weights, dtype=torch.float32)
+
+    print(f"Clase 0: {counts[0]}, Clase 1: {counts[1]}")
+    print(f"Pesos de clase: {class_weights}")
+
+    return dataset, num_features, class_weights
+
+   

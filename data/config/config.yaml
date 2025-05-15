@@ -1,60 +1,29 @@
 data:
   inputs:
-    # BTC
     - symbol: BTCUSDT
       timeframe: 1
       path: data/BTCUSDT_1m.csv
     - symbol: BTCUSDT
-      timeframe: 1
-      path: data/BTCUSDT_1m_1674031140001.csv
-    - symbol: BTCUSDT
       timeframe: 5
       path: data/BTCUSDT_5m.csv
-    - symbol: BTCUSDT
-      timeframe: 5
-      path: data/BTCUSDT_5m_1680035700001.csv
-
-    # ETH
     - symbol: ETHUSDT
       timeframe: 1
       path: data/ETHUSDT_1m.csv
     - symbol: ETHUSDT
-      timeframe: 1
-      path: data/ETHUSDT_1m_1674031140001.csv
-    - symbol: ETHUSDT
       timeframe: 5
       path: data/ETHUSDT_5m.csv
-    - symbol: ETHUSDT
-      timeframe: 5
-      path: data/ETHUSDT_5m_1680035700001.csv
-
-    # SOL
     - symbol: SOLUSDT
       timeframe: 1
       path: data/SOLUSDT_1m.csv
     - symbol: SOLUSDT
-      timeframe: 1
-      path: data/SOLUSDT_1m_1674031140001.csv
-    - symbol: SOLUSDT
       timeframe: 5
       path: data/SOLUSDT_5m.csv
-    - symbol: SOLUSDT
-      timeframe: 5
-      path: data/SOLUSDT_5m_1680035700001.csv
-
-    # XRP
     - symbol: XRPUSDT
       timeframe: 1
       path: data/XRPUSDT_1m.csv
     - symbol: XRPUSDT
-      timeframe: 1
-      path: data/XRPUSDT_1m_1674031140001.csv
-    - symbol: XRPUSDT
       timeframe: 5
       path: data/XRPUSDT_5m.csv
-    - symbol: XRPUSDT
-      timeframe: 5
-      path: data/XRPUSDT_5m_1680035700001.csv
 
   features:
     - "open"
@@ -82,13 +51,15 @@ data:
     - "close_change_5"
     - "symbol_code"
     - "timeframe_code"
+    - "volume_change"
+    - "liquidy_gap"
 
   sequence_length: 60
 
 training:
-  epochs: 20
+  epochs: 40
   batch_size: 64
-  learning_rate: 0.00005
+  learning_rate: 0.0001
   device: "cpu"
 
 model:
