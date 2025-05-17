@@ -17,7 +17,7 @@ import numpy as np
 
 
 
-def focal_loss(logits, targets, alpha=0.25, gamma=2.0):
+def focal_loss(logits, targets, alpha=0.45, gamma=2.0):
    bce = F.binary_cross_entropy_with_logits(logits.squeeze(), targets, reduction='none')
    pt  = torch.exp(-bce)
    return (alpha * (1 - pt)**gamma * bce).mean()
@@ -83,7 +83,7 @@ def main():
     patience = 10  # cantidad de épocas sin mejora antes de parar
     patience_counter = 0
 
-    # Entrenamiento
+        # Entrenamiento
     for epoch in range(start_epoch, config['training']['epochs']):
         total_correct = 0
         total_samples = 0
@@ -118,43 +118,40 @@ def main():
         avg_loss = sum(losses) / len(losses)
         win_rate = total_correct / total_samples
 
-        # ——— 3) Escaneo de umbrales para maximizar F1 en validación ———
+       # ——— 3) Uso de umbral fijo manual 0.41 ———
         labels_np = np.array(all_labels)
         probs_np  = np.array(all_probs)
-
-        epoch_best_f1, epoch_best_thr = 0.0, 0.5
-        for thr in np.linspace(0.1, 0.9, 81):
-            preds_thr = (probs_np >= thr).astype(int)
-            f1_tmp = f1_score(labels_np, preds_thr, zero_division=0)
-            if f1_tmp > epoch_best_f1:
-                epoch_best_f1, epoch_best_thr = f1_tmp, thr
-
-        # Métricas finales con el umbral óptimo
-        final_preds = (probs_np >= epoch_best_thr).astype(int)
+        
+        fixed_thr = 0.41
+        
+        final_preds = (probs_np >= fixed_thr).astype(int)
+        
         accuracy  = accuracy_score(labels_np, final_preds)
         precision = precision_score(labels_np, final_preds, zero_division=0)
         recall    = recall_score(labels_np, final_preds, zero_division=0)
+        f1_score_val = f1_score(labels_np, final_preds, zero_division=0)
         cm        = confusion_matrix(labels_np, final_preds)
-
-        print(f"\n📈 Época {epoch+1} — Mejor F1 validación: {epoch_best_f1:.4f} (thr={epoch_best_thr:.2f})")
+        
+        print(f"\n📈 Época {epoch+1} — Métricas con umbral fijo {fixed_thr:.2f}:")
+        print(f"   F1:        {f1_score_val:.4f}")
         print(f"   Accuracy:  {accuracy:.4f}")
         print(f"   Precision: {precision:.4f}")
         print(f"   Recall:    {recall:.4f}")
         print(f"   Matriz de confusión:\n{cm}")
-
-        # ——— 4) Checkpoint & early stopping basados en F1 ———
-        if epoch_best_f1 > best_f1:
-            best_f1 = epoch_best_f1
+        # ——— 4) Checkpoint & early stopping basados en F1 con umbral fijo ———
+        if f1_score_val > best_f1:
+            best_f1 = f1_score_val
             patience_counter = 0
             torch.save({
-                'epoch': epoch,
-                'feature_extractor': feature_extractor.state_dict(),
-                'sequence_model': sequence_model.state_dict(),
-                'attention': attention.state_dict(),
-                'agent': agent.state_dict(),
-                'optimizer': optimizer.state_dict()
-            }, checkpoint_path)
+        'epoch': epoch,
+        'feature_extractor': feature_extractor.state_dict(),
+        'sequence_model': sequence_model.state_dict(),
+        'attention': attention.state_dict(),
+        'agent': agent.state_dict(),
+        'optimizer': optimizer.state_dict()
+    }, checkpoint_path)
             print(f"💾 Checkpoint guardado en época {epoch+1} (F1={best_f1:.4f})")
+        
         else:
             patience_counter += 1
             if patience_counter >= patience:

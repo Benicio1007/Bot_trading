@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Configuración
 symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT']
-interval = '1m'
+interval = '5m'
 limit = 1000  # Binance solo deja 1000 velas por request
 total_candles = 30_000
 exchange = ccxt.binance()
@@ -23,7 +23,7 @@ def fetch_ohlcv(symbol, interval, since):
 for symbol in symbols:
     print(f"📥 Descargando {symbol}...")
     all_candles = []
-    since = exchange.parse8601('2024-01-01T00:00:00Z')
+    since = exchange.parse8601('2025-01-01T00:00:00Z')
     
     while len(all_candles) < total_candles:
         candles = fetch_ohlcv(symbol, interval, since)
