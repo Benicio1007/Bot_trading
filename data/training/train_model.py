@@ -2,13 +2,18 @@ import torch
 from torch.utils.data import DataLoader
 import yaml
 import os
-from data.modelos.feature_extractor import CNNFeatureExtractor
-from data.modelos.sequence_model import SequenceModel
-from data.modelos.attention_layer import AttentionBlock
-from data.modelos.drl_agent import PPOAgent
-from data.training.utils import CustomDataset, load_config
-import csv
+import sys
 from pathlib import Path
+
+# Agregar el directorio padre al path para poder importar los módulos
+sys.path.append(str(Path(__file__).parent.parent))
+
+from modelos.feature_extractor import CNNFeatureExtractor
+from modelos.sequence_model import SequenceModel
+from modelos.attention_layer import AttentionBlock
+from modelos.drl_agent import PPOAgent
+from training.utils import CustomDataset, load_config
+import csv
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from collections import Counter
 from torch.utils.data import WeightedRandomSampler
@@ -27,9 +32,10 @@ def main():
     config = load_config("data/config/config.yaml")
     device = torch.device(config['training']['device'])
     dataset = CustomDataset(config)
-    print(dataset.X.shape)
+    print(f"Tamaño del dataset: {len(dataset)}")
+    sample_X, sample_y = dataset[0]
+    print(f"Shape de un sample: {sample_X.shape}, label: {sample_y}")
     
-    config['data']['features'] = list(range(dataset.X.shape[2]))
     dataloader = DataLoader(dataset, batch_size=config['training']['batch_size'], shuffle=True)    
   
 
@@ -131,7 +137,6 @@ def main():
         recall    = recall_score(labels_np, final_preds, zero_division=0)
         f1_score_val = f1_score(labels_np, final_preds, zero_division=0)
         cm        = confusion_matrix(labels_np, final_preds)
-        
         print(f"\n📈 Época {epoch+1} — Métricas con umbral fijo {fixed_thr:.2f}:")
         print(f"   F1:        {f1_score_val:.4f}")
         print(f"   Accuracy:  {accuracy:.4f}")

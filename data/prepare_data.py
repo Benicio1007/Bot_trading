@@ -3,7 +3,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
-import ta
+import ta.trend
+import ta.momentum
+import ta.volatility
+import ta.volume
 from tqdm import tqdm
 from collections import Counter
 
@@ -36,56 +39,51 @@ class TradingDataset(Dataset):
 def compute_indicators(df):
     df = df.copy()
 
+    # === Features clásicos ===
     # EMA
-    df['ema_10'] = ta.trend.ema_indicator(df['close'], window=10, fillna=True)
+    df['ema_9'] = ta.trend.ema_indicator(df['close'], window=9, fillna=True)
+    df['ema_21'] = ta.trend.ema_indicator(df['close'], window=21, fillna=True)
     df['ema_50'] = ta.trend.ema_indicator(df['close'], window=50, fillna=True)
+    df['ema_slope'] = df['ema_9'].diff()
 
     # RSI
     df['rsi'] = ta.momentum.rsi(df['close'], window=14, fillna=True)
 
     # MACD
-    macd = ta.trend.macd(df['close'], fillna=True)
-    df['macd'] = macd
-    df['macd_signal'] = ta.trend.macd_signal(df['close'], fillna=True)
     df['macd_hist'] = ta.trend.macd_diff(df['close'], fillna=True)
-
-    # ATR
-    df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14, fillna=True)
-
-    # OBV
-    df['obv'] = ta.volume.on_balance_volume(df['close'], df['volume'], fillna=True)
-
-    # Stochastic Oscillator
-    stoch = ta.momentum.stoch(df['high'], df['low'], df['close'], fillna=True)
-    df['stochastic_k'] = stoch
-    df['stochastic_d'] = ta.momentum.stoch_signal(df['high'], df['low'], df['close'], fillna=True)
-
-    # Bollinger Bands
-    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2, fillna=True)
-    df['bollinger_upper'] = bb.bollinger_hband()
-    df['bollinger_lower'] = bb.bollinger_lband()
 
     # ADX
     df['adx'] = ta.trend.adx(df['high'], df['low'], df['close'], window=14, fillna=True)
 
-    df['hour'] = pd.to_datetime(df['timestamp']).dt.hour / 23.0
+    # Stochastic Oscillator
+    df['stochastic_k'] = ta.momentum.stoch(df['high'], df['low'], df['close'], fillna=True)
+    df['stochastic_d'] = ta.momentum.stoch_signal(df['high'], df['low'], df['close'], fillna=True)
 
+    # Bollinger Bands Percent
+    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2, fillna=True)
+    df['bb_percent'] = (df['close'] - bb.bollinger_lband()) / (bb.bollinger_hband() - bb.bollinger_lband())
 
-    body = df['close'] - df['open']
-    wick = df['high'] - df['low']
-    body_ratio = abs(body) / wick.replace(0, 1e-9)
+    # Candle features
+    df['candle_body'] = abs(df['close'] - df['open'])
+    df['upper_wick'] = df['high'] - df[['close', 'open']].max(axis=1)
+    df['lower_wick'] = df[['close', 'open']].min(axis=1) - df['low']
+    df['is_doji'] = (df['candle_body'] < (df['high'] - df['low']) * 0.1).astype(int)
+    df['is_marubozu'] = ((df['upper_wick'] < df['candle_body'] * 0.1) & (df['lower_wick'] < df['candle_body'] * 0.1)).astype(int)
+    df['range_pct'] = (df['high'] - df['low']) / df['close']
+    df['close_near_highs'] = ((df['close'] > df['high'] * 0.95)).astype(int)
 
-    df['candle_type'] = 0  # default doji
-    df.loc[body > 0, 'candle_type'] = 1  # bullish
-    df.loc[body < 0, 'candle_type'] = -1  # bearish
-    
-    df['close_change_1'] = df['close'].pct_change(1)
-    df['close_change_3'] = df['close'].pct_change(3)
-    df['close_change_5'] = df['close'].pct_change(5)
+    # Hora, minuto, día de la semana
+    df['hour'] = pd.to_datetime(df['timestamp']).dt.hour
+    df['minute'] = pd.to_datetime(df['timestamp']).dt.minute
+    df['weekday'] = pd.to_datetime(df['timestamp']).dt.weekday
 
-    df['volume_change'] = df['volume'].pct_change().fillna(0)
-    df['liquidity_gap'] = (df['high'] - df['low']) / df['close']
+    # === Features de volumen ===
+    df['delta_volume'] = df['volume'].diff().fillna(0)
+    df['volume_spike'] = (df['volume'] > df['volume'].rolling(20).mean() * 1.5).astype(int)
+    df['institutional_volume_bar'] = (df['volume'] > df['volume'].rolling(50).mean() * 2).astype(int)
 
+    # === Features de order block, liquidez, FVG, etc. ===
+    # TODO: implementar lógica real para estos features si se requiere
 
     return df
 
@@ -141,16 +139,24 @@ def create_dataset(config):
         df_merged['symbol_code'] = encode_symbol(symbol) / 3  # Normalizado
         selected_features += ['symbol_code']
 
-        df_final = df_merged[selected_features].dropna()
-
-        # Normalizar (excepto symbol_code)
+        # Asegurar que todos los features existan en el DataFrame
+        for feat in selected_features:
+            if feat not in df_merged.columns:
+                df_merged[feat] = 0
+        
+        df_final = df_merged[selected_features].copy()
         numeric_cols = [col for col in df_final.columns if col != 'symbol_code']
-        df_final[numeric_cols] = (df_final[numeric_cols] - df_final[numeric_cols].rolling(100).mean()) / df_final[numeric_cols].rolling(100).std()
-        df_final = df_final.dropna()  # asegurate de limpiar NaNs resultantes
-
+        # Normalización rolling sobre DataFrame
+        if len(numeric_cols) > 0:
+            df_numeric = df_final[numeric_cols]
+            if not isinstance(df_numeric, pd.DataFrame):
+                df_numeric = pd.DataFrame(df_numeric, columns=pd.Index(numeric_cols))
+            rolling_mean = df_numeric.rolling(100).mean()
+            rolling_std = df_numeric.rolling(100).std()
+            df_final[numeric_cols] = (df_numeric - rolling_mean) / rolling_std
+        df_final = df_final.dropna()
         combined_data.append(df_final.values)
 
-    # Juntamos todo
     all_data = np.concatenate(combined_data, axis=0)
     dataset = TradingDataset(all_data, sequence_length)
     num_features = all_data.shape[1]

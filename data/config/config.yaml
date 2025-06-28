@@ -26,41 +26,45 @@ data:
       path: data/XRPUSDT_5m.csv
 
   features:
-    - "open"
-    - "high"
-    - "low"
-    - "close"
-    - "volume"
-    - "rsi"
-    - "macd"
-    - "macd_signal"
-    - "macd_hist"
-    - "ema_10"
-    - "ema_50"
-    - "atr"
-    - "obv"
-    - "stochastic_k"
-    - "stochastic_d"
-    - "bollinger_upper"
-    - "bollinger_lower"
-    - "adx"
-    - "hour"
-    - "candle_type"
-    - "close_change_1"
-    - "close_change_3"
-    - "close_change_5"
-    - "symbol_code"
-    - "timeframe_code"
-    - "volume_change"
-    - "liquidy_gap"
+    - open
+    - high
+    - low
+    - close
+    - volume
+    - rsi
+    - macd_hist
+    - ema_9
+    - ema_21
+    - ema_50
+    - ema_slope
+    - adx
+    - stochastic_k
+    - stochastic_d
+    - bb_percent
+    - candle_body
+    - upper_wick
+    - lower_wick
+    - is_doji
+    - is_marubozu
+    - range_pct
+    - close_near_highs
+    - candle_type
+    - hour
+    - minute
+    - weekday
+    - delta_volume
+    - volume_spike
+    - institutional_volume_bar
+    - symbol_code
+    - timeframe_code
 
   sequence_length: 60
 training:
   optimizer: AdamW
-  learning_rate: 0.0001
+  learning_rate: 0.001
   loss_function: BCEWithLogitsLoss  # con class_weights si están disponibles
   batch_size: 64
-  epochs: 30
+  epochs: 20
   scheduler:
     type: CosineAnnealingLR
     T_max: 30
@@ -74,7 +78,7 @@ model:
   attention_heads: 4
   dropout: 0.2
   sequence_length: 60
-  input_features: 28  # se calcula según tu lista de features arriba
+  input_features: 30  # se calcula según tu lista de features arriba
   output_size: 1  # binary classification (buy/sell signal)
 
 rl_agent:

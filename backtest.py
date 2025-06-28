@@ -1,169 +1,134 @@
-import os 
+import os
 import pandas as pd
-import time
+import torch
 from datetime import datetime
-from broker import PaperBroker
-from strategy import MLStrategy
-from features import build_features
+from data.modelos.feature_extractor import CNNFeatureExtractor
+from data.modelos.sequence_model import SequenceModel
+from data.modelos.attention_layer import AttentionBlock
+from data.modelos.drl_agent import PPOAgent
+from data.prepare_data import compute_indicators
+from data.training.utils import normalize, load_config
+import numpy as np
 
-# Configuración
-SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'SOL/USDT']
-INTERVAL = '5m'
-CAPITAL_TOTAL = 1000
-LEVERAGE = 30
-POSITION_RATIO = 0.20
-TP_PORCENTAJE = 0.004
-SL_PORCENTAJE = 0.002
-COMISION_PORCENTAJE = 0.0004
-MIN_NOTIONAL = 100
-RETRAIN_INTERVAL = 10
-VOLATILITY_CICLOS = 10
-EXTREME_VOLATILITY_THRESHOLD = 0.05
+# === CONFIGURACIÓN ===
+config = load_config("data/config/config.yaml")
+config['data']['features'] = ['open', 'high', 'low', 'close', 'volume']
+features = config['data']['features']
+device = torch.device(config['training']['device'])
+sequence_length = config['data']['sequence_length']
 
-bot = PaperBroker()
-strategy = MLStrategy(threshold=0.80)
+# === MODELO ===
+feature_extractor = CNNFeatureExtractor(config).to(device)
+sequence_model = SequenceModel(config).to(device)
+attention = AttentionBlock(config).to(device)
+agent = PPOAgent(config).to(device)
 
-def convertir_a_df(data):
-    return pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])
+checkpoint = torch.load("checkpoints/model_last.pt", map_location=device)
+feature_extractor.load_state_dict(checkpoint['feature_extractor'])
+sequence_model.load_state_dict(checkpoint['sequence_model'])
+attention.load_state_dict(checkpoint['attention'])
+agent.load_state_dict(checkpoint['agent'])
 
-def initial_train():
-    combined = pd.DataFrame()
-    for sym in SYMBOLS:
-        raw = bot.fetch_ohlcv(sym, INTERVAL, limit=500)
-        df = convertir_a_df(raw)
-        df['symbol'] = sym
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        combined = pd.concat([combined, df])
-    strategy.train(combined)
+feature_extractor.eval()
+sequence_model.eval()
+attention.eval()
+agent.eval()
 
-try:
-    _ = strategy.model.predict([[0]*10])
-except:
-    initial_train()
-
-capital_actual = bot.get_balance()
-capital_maximo = capital_actual
-riesgo_actual = POSITION_RATIO
-riesgo_minimo = 0.10
-riesgo_maximo = 0.30
-drawdown_actual = 0
-drawdown_maximo = 0
-
-csv_file = 'operaciones.csv'
-if os.path.exists(csv_file):
-    os.remove(csv_file)
-
-metrics = {'total_trades': 0, 'wins': 0, 'losses': 0, 'pnl_sum': 0}
-operaciones_log = []
-
-symbol_data = {}
-for symbol in SYMBOLS:
-    file_name = f"data/{symbol.replace('/', '')}_5m.csv"
-    df = pd.read_csv(file_name)
+# === FUNCIONES ===
+def cargar_dataset(path):
+    df = pd.read_csv(path)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = build_features(df)
-    symbol_data[symbol] = df
+    return df
 
-symbol = SYMBOLS[0]
-df = symbol_data[symbol]
-operaciones = {'open': False}
-volatility_candle_count = 0
+def generar_probabilidad(df, symbol_code, timeframe_code):
+    df = compute_indicators(df)
+    df['symbol_code'] = symbol_code
+    df['timeframe_code'] = timeframe_code
+    if len(df) < sequence_length + 1 or not all(f in df.columns for f in features):
+        print("❌ No hay suficientes datos o faltan features.")
+        return None
+    x = normalize(df[features]).fillna(0)
+    x_seq = x.iloc[-sequence_length:].values
+    x_tensor = torch.tensor(x_seq, dtype=torch.float32).unsqueeze(0).to(device)
+    with torch.no_grad():
+        f = feature_extractor(x_tensor)
+        s = sequence_model(f)
+        c = attention(s)
+        logits = agent(c)
+        prob = torch.sigmoid(logits[:, 1]).item()
+        print(f"🧠 Probabilidad generada: {prob:.4f}")
+        return prob
 
-for i in range(100, len(df)):
-    volatility_candle_count += 1
 
-    if not operaciones['open'] and volatility_candle_count % VOLATILITY_CICLOS == 0:
-        vols = {}
-        for sym in SYMBOLS:
-            data = symbol_data[sym].iloc[i-VOLATILITY_CICLOS:i]
-            vols[sym] = data['close'].pct_change().abs().mean()
-        filtered = {s: v for s, v in vols.items() if v < EXTREME_VOLATILITY_THRESHOLD}
-        if not filtered:
-            filtered = vols
-        symbol = max(filtered, key=filtered.get)
-        df = symbol_data[symbol]
+def ejecutar_backtest(file_path, symbol_code):
+    df = cargar_dataset(file_path)
+    capital = 1000
+    balance = capital
+    trades = []
+    open_trade = None
+    equity_curve = []
 
-    row = df.iloc[i]
-    price = row['close']
-    ts = row['timestamp']
+    for i in range(sequence_length, len(df)):
+        ventana = df.iloc[i-sequence_length:i+1].copy()
+        prob = generar_probabilidad(ventana, symbol_code, 1)  # timeframe 5m = 1
+        if prob is None:
+            continue
 
-    if operaciones['open']:
-        operaciones['candles'] += 1
-        current = price
-        pnl_bruto = (current - operaciones['entry_price']) * operaciones['qty'] if operaciones['side'] == 'buy' else (operaciones['entry_price'] - current) * operaciones['qty']
-        com_entrada = operaciones['entry_price'] * operaciones['qty'] * COMISION_PORCENTAJE
-        com_salida = current * operaciones['qty'] * COMISION_PORCENTAJE
-        pnl = pnl_bruto - (com_entrada + com_salida)
+        close = ventana.iloc[-1]['close']
+        timestamp = ventana.iloc[-1]['timestamp']
+        volatility = ventana['close'].pct_change().std()
+        TP = min(0.01, max(0.003, volatility * 3))
+        SL = min(0.007, max(0.002, volatility * 2))
 
-        if operaciones['side'] == 'buy':
-            tp = operaciones['entry_price'] * (1 + TP_PORCENTAJE)
-            sl = operaciones['entry_price'] * (1 - SL_PORCENTAJE)
-            close_condition = current >= tp or current <= sl
+        if open_trade:
+            change = (close - open_trade['entry']) / open_trade['entry'] if open_trade['side'] == 'buy' else (open_trade['entry'] - close) / open_trade['entry']
+            if change >= TP:
+                pnl = open_trade['qty'] * (close - open_trade['entry']) if open_trade['side'] == 'buy' else open_trade['qty'] * (open_trade['entry'] - close)
+                trades.append((timestamp, 'TP', pnl))
+                balance += pnl
+                open_trade = None
+            elif change <= -SL:
+                pnl = open_trade['qty'] * (close - open_trade['entry']) if open_trade['side'] == 'buy' else open_trade['qty'] * (open_trade['entry'] - close)
+                trades.append((timestamp, 'SL', pnl))
+                balance += pnl
+                open_trade = None
         else:
-            tp = operaciones['entry_price'] * (1 - TP_PORCENTAJE)
-            sl = operaciones['entry_price'] * (1 + SL_PORCENTAJE)
-            close_condition = current <= tp or current >= sl
+            if prob >= 0.52:
+                qty = (balance * 0.2 * 30) / close
+                open_trade = {'entry': close, 'side': 'buy', 'qty': qty}
+            elif prob <= 0.48:
+                qty = (balance * 0.2 * 30) / close
+                open_trade = {'entry': close, 'side': 'sell', 'qty': qty}
 
-        if close_condition:
-            res = 'GANANCIA' if pnl > 0 else 'PÉRDIDA'
-            ts_exit = ts
-            metrics['total_trades'] += 1
-            metrics['wins'] += int(pnl > 0)
-            metrics['losses'] += int(pnl <= 0)
-            metrics['pnl_sum'] += pnl
-            capital_actual += pnl
-            capital_maximo = max(capital_maximo, capital_actual)
-            drawdown_actual = (capital_maximo - capital_actual) / capital_maximo
-            drawdown_maximo = max(drawdown_maximo, drawdown_actual)
-            riesgo_actual = min(riesgo_actual + 0.05, riesgo_maximo) if pnl > 0 else max(riesgo_actual - 0.05, riesgo_minimo)
+        equity_curve.append(balance)
 
-            operaciones_log.append([ 
-                operaciones['side'], symbol, operaciones['entry_price'], current,
-                res, round(pnl, 2), round(com_entrada + com_salida, 2), operaciones['qty'],
-                operaciones['ts_entry'], ts_exit, round(capital_actual, 2)
-            ])
+    # === MÉTRICAS ===
+    pnl_total = balance - capital
+    win_trades = [t for t in trades if t[2] > 0]
+    loss_trades = [t for t in trades if t[2] <= 0]
+    winrate = len(win_trades) / len(trades) * 100 if trades else 0
+    avg_pnl = np.mean([t[2] for t in trades]) if trades else 0
+    max_dd = max([max(equity_curve[:i]) - e for i, e in enumerate(equity_curve) if i > 0], default=0)
 
-            operaciones = {'open': False}
+    return balance, trades, pnl_total, winrate, avg_pnl, max_dd
 
-    else:
-        sub_df = df.iloc[i-100:i]
-        sub_df = strategy.generate_signals(sub_df)
-        last = sub_df.iloc[-1]
-        signal = last['signal']
+# === EJECUCIÓN ===
+symbols = {
+    'BTCUSDT_5m.csv': 0,
+    'ETHUSDT_5m.csv': 1,
+    'SOLUSDT_5m.csv': 2,
+    'XRPUSDT_5m.csv': 3
+}
 
-        if signal in [1, -1]:
-            side = 'buy' if signal == 1 else 'sell'
-            capital = CAPITAL_TOTAL * riesgo_actual
-            qty = round((capital * LEVERAGE) / price, 3)
-            if qty * price >= MIN_NOTIONAL:
-                operaciones = {
-                    'open': True,
-                    'symbol': symbol,
-                    'entry_price': price,
-                    'side': side,
-                    'qty': qty,
-                    'ts_entry': ts,
-                    'candles': 0
-                }
-
-# Guardar CSV y métricas
-if operaciones_log:
-    df_ops = pd.DataFrame(operaciones_log, columns=[ 
-        'Tipo', 'Activo', 'Entrada', 'Salida', 'Resultado', 'PNL Neto',
-        'Comisión', 'Qty', 'Timestamp Entrada', 'Timestamp Salida', 'Capital'
-    ])
-    df_ops.to_csv(csv_file, index=False)
-
-winrate = metrics['wins'] / metrics['total_trades'] * 100 if metrics['total_trades'] > 0 else 0
-avg_pnl = metrics['pnl_sum'] / metrics['total_trades'] if metrics['total_trades'] > 0 else 0
-pnl_acumulado = metrics['pnl_sum']
-
-# Mostrar los resultados finales
-print("\n================= RESULTADOS FINALES =================")
-print(f"📈 Total de operaciones: {metrics['total_trades']}")
-print(f"✅ Winrate: {winrate:.2f}%")
-print(f"💵 PnL promedio por trade: {avg_pnl:.2f} USD")
-print(f"💰 PnL acumulado total: {pnl_acumulado:.2f} USD")
-print(f"📉 Drawdown máximo: {drawdown_maximo*100:.2f}%")
-print(f"💰 Balance final: {capital_actual:.2f} USD")
-print("=====================================================\n")
+for archivo, code in symbols.items():
+    path = os.path.join("data", archivo)
+    final_balance, operaciones, pnl, winrate, avg_pnl, max_dd = ejecutar_backtest(path, code)
+    print(f"\n🧪 Backtest para {archivo}")
+    print(f"Balance final: {final_balance:.2f} USD")
+    print(f"Total PnL: {pnl:.2f} USD")
+    print(f"Winrate: {winrate:.2f}%")
+    print(f"Promedio PnL por trade: {avg_pnl:.2f} USD")
+    print(f"Max Drawdown: {max_dd:.2f} USD")
+    print(f"Cantidad de trades: {len(operaciones)}")
+    for t in operaciones:
+        print(f"{t[0]} | {t[1]} | PnL: {t[2]:.2f} USD")
