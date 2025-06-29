@@ -10,6 +10,12 @@ class SequenceModel(nn.Module):
                             num_layers=config['model']['lstm_layers'],
                             batch_first=True,
                             bidirectional=True)
+        
+        for name, param in self.lstm.named_parameters():
+            if 'weight' in name:
+                nn.init.xavier_uniform_(param)
+            elif 'bias' in name:
+                nn.init.constant_(param, 0)
 
     def forward(self, x):
         output, _ = self.lstm(x)

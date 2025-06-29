@@ -51,12 +51,17 @@ class CustomDataset(Dataset):
             print(f"Archivo: {file_path}")
             print(f"Features presentes: {list(df.columns)}")
             if missing:
-                print(f"FALTAN features: {missing}")
+                raise ValueError(f"🚨 Faltan features requeridos: {missing} en archivo {file_path}")
+
             else:
                 print("Todos los features requeridos están presentes.\n")
 
             if not all(col in df.columns for col in config['data']['features']):
                 continue
+
+            if df.empty:
+                raise ValueError(f"🚨 El archivo {file_path} quedó vacío después de eliminar NaNs. Revisa la calidad de tus datos o ajusta tus indicadores.")
+
             
             df = normalize(df[config['data']['features']])
             self.file_infos.append((df, symbol, input_cfg['timeframe']))
@@ -73,6 +78,8 @@ class CustomDataset(Dataset):
             if idx < offset + n:
                 i = idx - offset
                 seq = df.iloc[i:i+self.sequence_length].values
+                if np.isnan(seq).any() or np.isinf(seq).any():
+                    raise ValueError(f"Secuencia inválida: contiene NaN o inf en idx={idx}")
                 current_price = df.iloc[i + self.sequence_length - 1]['close']  # 'close' actual
                 future_price = df.iloc[i + self.sequence_length]['close']       # 'close' siguiente
                 change = (future_price - current_price) / (current_price + 1e-9)
@@ -80,3 +87,24 @@ class CustomDataset(Dataset):
                 return torch.tensor(seq, dtype=torch.float32), torch.tensor(label, dtype=torch.long)
             offset += n
         raise IndexError('Index out of range in CustomDataset')
+
+def split_dataset_temporally(config, validation_split=0.2):
+    """
+    Divide el dataset temporalmente: los datos más recientes van a validación
+    """
+    dataset = CustomDataset(config)
+    
+    # Ordenar por timestamp (asumiendo que los datos están ordenados cronológicamente)
+    total_samples = len(dataset)
+    validation_size = int(total_samples * validation_split)
+    train_size = total_samples - validation_size
+    
+    # Crear índices para train y validation
+    train_indices = list(range(train_size))
+    validation_indices = list(range(train_size, total_samples))
+    
+    print(f"📊 División temporal del dataset:")
+    print(f"   Training: {train_size} muestras (primeros {100-validation_split*100:.0f}%)")
+    print(f"   Validation: {validation_size} muestras (últimos {validation_split*100:.0f}%)")
+    
+    return train_indices, validation_indices

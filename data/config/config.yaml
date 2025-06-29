@@ -2,28 +2,28 @@ data:
   inputs:
     - symbol: BTCUSDT
       timeframe: 1
-      path: data/BTCUSDT_1m.csv
+      path: data/dataset/2021/BTCUSDT_1m.csv
     - symbol: BTCUSDT
       timeframe: 5
-      path: data/BTCUSDT_5m.csv
+      path: data/dataset/2021/BTCUSDT_5m.csv
     - symbol: ETHUSDT
       timeframe: 1
-      path: data/ETHUSDT_1m.csv
+      path: data/dataset/2021/ETHUSDT_1m.csv
     - symbol: ETHUSDT
       timeframe: 5
-      path: data/ETHUSDT_5m.csv
+      path: data/dataset/2021/ETHUSDT_5m.csv
     - symbol: SOLUSDT
       timeframe: 1
-      path: data/SOLUSDT_1m.csv
+      path: data/dataset/2021/SOLUSDT_1m.csv
     - symbol: SOLUSDT
       timeframe: 5
-      path: data/SOLUSDT_5m.csv
+      path: data/dataset/2021/SOLUSDT_5m.csv
     - symbol: XRPUSDT
       timeframe: 1
-      path: data/XRPUSDT_1m.csv
+      path: data/dataset/2021/XRPUSDT_1m.csv
     - symbol: XRPUSDT
       timeframe: 5
-      path: data/XRPUSDT_5m.csv
+      path: data/dataset/2021/XRPUSDT_5m.csv
 
   features:
     - open
@@ -61,7 +61,7 @@ data:
   sequence_length: 60
 training:
   optimizer: AdamW
-  learning_rate: 0.001
+  learning_rate: 0.0001
   loss_function: BCEWithLogitsLoss  # con class_weights si están disponibles
   batch_size: 64
   epochs: 20
@@ -76,7 +76,7 @@ model:
   lstm_hidden_size: 64
   lstm_layers: 3
   attention_heads: 4
-  dropout: 0.2
+  dropout: 0.5
   sequence_length: 60
   input_features: 30  # se calcula según tu lista de features arriba
   output_size: 1  # binary classification (buy/sell signal)

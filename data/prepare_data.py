@@ -81,9 +81,9 @@ def compute_indicators(df):
     df['delta_volume'] = df['volume'].diff().fillna(0)
     df['volume_spike'] = (df['volume'] > df['volume'].rolling(20).mean() * 1.5).astype(int)
     df['institutional_volume_bar'] = (df['volume'] > df['volume'].rolling(50).mean() * 2).astype(int)
-
-    # === Features de order block, liquidez, FVG, etc. ===
-    # TODO: implementar lógica real para estos features si se requiere
+    
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df.dropna(inplace=True)
 
     return df
 

@@ -9,6 +9,12 @@ class CNNFeatureExtractor(nn.Module):
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(config['model']['dropout'])
 
+        for m in self.modules():
+            if isinstance(m, (nn.Conv1d, nn.Linear)):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
     def forward(self, x):
         # x: [batch, seq_len, features] → [batch, features, seq_len]
         x = x.permute(0, 2, 1)
