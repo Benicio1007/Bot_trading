@@ -11,27 +11,18 @@ timeframes = {
     '5m': {'limit': 1000, 'total_candles': 10000},
     '1m': {'limit': 1000, 'total_candles': 50000}
 }
-years = [2021, 2022, 2023, 2024, 2025]
+# Marzo 2025
 exchange = ccxt.binance()
-save_dir = "data/dataset"
+save_dir = "data/dataset/marzo_2025"
 os.makedirs(save_dir, exist_ok=True)
 
-def get_random_start_date(year):
-    """Genera una fecha aleatoria de inicio dentro del año"""
-    start_of_year = datetime(year, 1, 1)
-    end_of_year = datetime(year, 12, 31)
-    
-    # Generar fecha aleatoria
-    random_date = start_of_year + timedelta(
-        days=random.randint(0, (end_of_year - start_of_year).days)
-    )
-    
-    # Asegurar que hay suficientes datos después de esta fecha
-    days_remaining = (end_of_year - random_date).days
-    if days_remaining < 30:  # Si quedan menos de 30 días, ajustar
-        random_date = end_of_year - timedelta(days=30)
-    
-    return random_date
+def get_marzo_start_date():
+    """Devuelve el 1 de marzo de 2025"""
+    return datetime(2025, 3, 1)
+
+def get_marzo_end_date():
+    """Devuelve el 31 de marzo de 2025"""
+    return datetime(2025, 3, 31, 23, 59, 59)
 
 def fetch_ohlcv(symbol, interval, since, limit):
     try:
@@ -40,28 +31,37 @@ def fetch_ohlcv(symbol, interval, since, limit):
         print(f"❌ Error al descargar {symbol} {interval}: {e}")
         return []
 
-def download_data_for_year(symbol, year, timeframe, total_candles, limit):
-    """Descarga datos para un símbolo, año y timeframe específico"""
-    print(f"📥 Descargando {symbol} {timeframe} para {year}...")
+def download_data_for_marzo(symbol, timeframe, total_candles, limit):
+    """Descarga datos para un símbolo y timeframe específico de marzo 2025"""
+    print(f"📥 Descargando {symbol} {timeframe} para marzo 2025...")
     
-    # Obtener fecha de inicio aleatoria
-    start_date = get_random_start_date(year)
+    # Obtener fecha de inicio de marzo
+    start_date = get_marzo_start_date()
+    end_date = get_marzo_end_date()
     since = int(start_date.timestamp() * 1000)
+    end_timestamp = int(end_date.timestamp() * 1000)
     
     all_candles = []
     attempts = 0
-    max_attempts = 50  # Máximo 50 intentos para evitar loops infinitos
+    max_attempts = 100  # Máximo 100 intentos para evitar loops infinitos
     
     while len(all_candles) < total_candles and attempts < max_attempts:
         candles = fetch_ohlcv(symbol, timeframe, since, limit)
         if not candles:
             break
         
-        all_candles.extend(candles)
+        # Filtrar solo velas de marzo 2025
+        marzo_candles = [candle for candle in candles if candle[0] <= end_timestamp]
+        all_candles.extend(marzo_candles)
+        
+        # Si la última vela está fuera de marzo, parar
+        if candles[-1][0] > end_timestamp:
+            break
+            
         since = candles[-1][0] + 1
         attempts += 1
         
-        print(f"✅ {len(all_candles)} velas descargadas de {symbol} {timeframe} {year}")
+        print(f"✅ {len(all_candles)} velas descargadas de {symbol} {timeframe} marzo 2025")
         time.sleep(0.5)  # Rate limiting
     
     if len(all_candles) >= total_candles:
@@ -70,43 +70,40 @@ def download_data_for_year(symbol, year, timeframe, total_candles, limit):
     return all_candles
 
 def main():
-    print("🚀 Iniciando descarga de datos por años...")
+    print("🚀 Iniciando descarga de datos de marzo 2025...")
+    print(f"📅 Período: {get_marzo_start_date().strftime('%d/%m/%Y')} - {get_marzo_end_date().strftime('%d/%m/%Y')}")
+    print(f"📁 Guardando en: {save_dir}")
     
-    for year in years:
-        print(f"\n📅 Procesando año {year}")
-        year_dir = os.path.join(save_dir, str(year))
-        os.makedirs(year_dir, exist_ok=True)
+    for symbol in symbols:
+        symbol_clean = symbol.replace('/', '')
         
-        for symbol in symbols:
-            symbol_clean = symbol.replace('/', '')
+        for timeframe, config in timeframes.items():
+            print(f"\n📊 Descargando {symbol} {timeframe} para marzo 2025")
             
-            for timeframe, config in timeframes.items():
-                print(f"\n📊 Descargando {symbol} {timeframe} para {year}")
+            # Descargar datos
+            candles = download_data_for_marzo(
+                symbol, timeframe, 
+                config['total_candles'], config['limit']
+            )
+            
+            if candles:
+                # Crear DataFrame
+                df = pd.DataFrame(candles)
+                df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 
-                # Descargar datos
-                candles = download_data_for_year(
-                    symbol, year, timeframe, 
-                    config['total_candles'], config['limit']
-                )
+                # Guardar archivo
+                filename = os.path.join(save_dir, f"{symbol_clean}_{timeframe}.csv")
+                df.to_csv(filename, index=False)
                 
-                if candles:
-                    # Crear DataFrame
-                    df = pd.DataFrame(candles)
-                    df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                    
-                    # Guardar archivo
-                    filename = os.path.join(year_dir, f"{symbol_clean}_{timeframe}.csv")
-                    df.to_csv(filename, index=False)
-                    
-                    print(f"💾 Guardado: {filename} ({len(df)} registros)")
-                    print(f"📅 Rango: {df['timestamp'].min()} a {df['timestamp'].max()}")
-                else:
-                    print(f"❌ No se pudieron descargar datos para {symbol} {timeframe} {year}")
-                
-                time.sleep(1)  # Pausa entre descargas
+                print(f"💾 Guardado: {filename} ({len(df)} registros)")
+                print(f"📅 Rango: {df['timestamp'].min()} a {df['timestamp'].max()}")
+            else:
+                print(f"❌ No se pudieron descargar datos para {symbol} {timeframe} marzo 2025")
+            
+            time.sleep(1)  # Pausa entre descargas
     
-    print("\n✅ Descarga completada!")
+    print("\n✅ Descarga de marzo 2025 completada!")
 
 if __name__ == "__main__":
     main()

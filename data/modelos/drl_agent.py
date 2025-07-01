@@ -7,7 +7,8 @@ class PPOAgent(nn.Module):
         super().__init__()
         input_size = config['model']['lstm_hidden_size'] * 2
         self.fc1 = nn.Linear(input_size, 128)
-        self.fc2 = nn.Linear(128, 3)  # Buy, Sell, Hold (3 acciones)
+        self.fc2 = nn.Linear(128, 1)  # Solo 1 logit para clasificación binaria
+        self.sigmoid = nn.Sigmoid()
 
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -17,7 +18,8 @@ class PPOAgent(nn.Module):
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
-        return self.fc2(x)
+        logits = self.fc2(x)
+        return logits  # Retorna logits [B, 1]
 
     def compute_loss(self, logits, targets):
-        return F.cross_entropy(logits, targets)
+        return F.binary_cross_entropy_with_logits(logits.squeeze(), targets.float())

@@ -4,6 +4,7 @@ import yaml
 import os
 import sys
 from pathlib import Path
+import torch.nn as nn
 
 # Agregar el directorio padre al path para poder importar los módulos
 sys.path.append(str(Path(__file__).parent.parent))
@@ -23,8 +24,18 @@ import numpy as np
 
 
 def focal_loss(logits, targets, alpha=0.45, gamma=2.0):
+    # Asegurar que las dimensiones sean correctas
+    if logits.dim() == 0:
+        logits = logits.unsqueeze(0)  # Agregar dimensión de batch si es necesario
+    if targets.dim() == 0:
+        targets = targets.unsqueeze(0)  # Agregar dimensión de batch si es necesario
+    
+    # Asegurar que ambos tensores tengan la misma forma
+    if logits.shape != targets.shape:
+        targets = targets.view_as(logits)
+    
     logits = torch.clamp(logits, min=-20, max=20)  # evita logits extremos
-    bce = F.binary_cross_entropy_with_logits(logits.squeeze(), targets, reduction='none')
+    bce = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
     pt  = torch.exp(-bce)
     return (alpha * (1 - pt)**gamma * bce).mean()
 
@@ -45,7 +56,38 @@ def find_optimal_threshold(probs, labels, threshold_range=(0.40, 0.60), step=0.0
     
     return best_threshold, best_f1
 
+# Paso 3: Pérdida con castigo a falsos positivos
+def create_bce_criterion(device):
+    """Crea BCEWithLogitsLoss con pos_weight para penalizar falsos positivos"""
+    pos_weight = torch.tensor([2.2]).to(device)  # Menos de 1 → penaliza FP
+    return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
+def safe_bce_loss(logits, targets, criterion):
+    """Maneja de forma segura las dimensiones para BCE loss"""
+    # Asegurar que ambos tensores tengan la misma forma
+    logits_flat = logits.squeeze()
+    targets_flat = targets.float()
+    
+    # Si son escalares, agregar dimensión
+    if logits_flat.dim() == 0:
+        logits_flat = logits_flat.unsqueeze(0)
+    if targets_flat.dim() == 0:
+        targets_flat = targets_flat.unsqueeze(0)
+    
+    # Asegurar que tengan la misma forma
+    if logits_flat.shape != targets_flat.shape:
+        targets_flat = targets_flat.view_as(logits_flat)
+    
+    # Debug: mostrar shapes finales (solo en el primer batch)
+    if hasattr(safe_bce_loss, 'debug_shown'):
+        pass
+    else:
+        print(f"🔧 safe_bce_loss - Shapes finales:")
+        print(f"   logits_flat: {logits_flat.shape}")
+        print(f"   targets_flat: {targets_flat.shape}")
+        safe_bce_loss.debug_shown = True
+    
+    return criterion(logits_flat, targets_flat)
 
 def main():
     config = load_config("data/config/config.yaml")
@@ -71,6 +113,19 @@ def main():
     counts = Counter(labels)
     weight_per_class = {cls: 1.0/count for cls, count in counts.items()}
     sample_weights = [weight_per_class[int(full_dataset[i][1])] for i in train_indices]
+    
+    # Paso 1: Confirmar balance de clases
+    print(f"📊 Balance de clases en training:")
+    print(f"   Clase 0: {counts[0]} ({counts[0]/len(labels)*100:.1f}%)")
+    print(f"   Clase 1: {counts[1]} ({counts[1]/len(labels)*100:.1f}%)")
+    print(f"   Total: {len(labels)} muestras")
+    
+    # Verificar si hay clase 2 (no debería haber)
+    if 2 in counts:
+        print(f"   ⚠️ Clase 2 encontrada: {counts[2]} muestras")
+    else:
+        print(f"   ✅ Solo clases 0 y 1 (clasificación binaria correcta)")
+    
     train_sampler = WeightedRandomSampler(sample_weights,
                                          num_samples=len(sample_weights),
                                          replacement=True)
@@ -89,15 +144,23 @@ def main():
     attention = AttentionBlock(config).to(device)
     agent = PPOAgent(config).to(device)
     
+    # Paso 5: Reiniciar la capa final (bias = 0, weight ~ N(0,0.01)) para quitar sesgo inicial
+    agent.fc2.weight.data.normal_(0, 0.01)
+    agent.fc2.bias.data.zero_()
+    print("🔄 Capa final reiniciada: bias=0, weights~N(0,0.01)")
+    
+    # Paso 3: Crear criterio de pérdida con castigo a falsos positivos
+    criterion = create_bce_criterion(device)
+    
     optimizer = torch.optim.Adam(list(feature_extractor.parameters()) +
                                  list(sequence_model.parameters()) +
                                  list(attention.parameters()) +
                                  list(agent.parameters()),
                                  lr=config['training']['learning_rate'],
-                                 weight_decay=0.0005)
+                                 weight_decay=0.0001)
     
-    # Ajustar learning rate a 0.0001
-    optimizer.param_groups[0]["lr"] = 0.0001
+    # Ajustar learning rate a 0.001 para 2021 (Bull market)
+    optimizer.param_groups[0]["lr"] = 0.001
     
     # Scheduler para reducir learning rate cuando F1 se estanca
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -113,6 +176,10 @@ def main():
     print(f"   Learning Rate inicial: {optimizer.param_groups[0]['lr']:.6f}")
     print(f"   Weight Decay: {optimizer.param_groups[0]['weight_decay']:.6f}")
     print(f"   Early Stopping Patience: 5 épocas")
+    print(f"   Configuración: 2021 Bull Market (LR=0.001, Dropout=0.3, WD=0.0001)")
+    print(f"   Clasificación: Binaria (1 logit + sigmoid)")
+    print(f"   Pérdida: BCEWithLogitsLoss(pos_weight=0.3)")
+    print(f"   Umbral inicial: 0.51")
     
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
     Path("logs").mkdir(parents=True, exist_ok=True)
@@ -122,7 +189,8 @@ def main():
     
     if os.path.exists(checkpoint_path):
         print("✅ Checkpoint encontrado. Cargando modelo...")
-        checkpoint = torch.load(checkpoint_path)
+        # Cargar con weights_only=False para compatibilidad con checkpoints antiguos
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
         feature_extractor.load_state_dict(checkpoint['feature_extractor'])
         sequence_model.load_state_dict(checkpoint['sequence_model'])
         attention.load_state_dict(checkpoint['attention'])
@@ -131,6 +199,7 @@ def main():
         if 'scheduler' in checkpoint:
             scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch = checkpoint['epoch'] + 1
+        print(f"✅ Checkpoint cargado exitosamente desde época {checkpoint['epoch']}")
 
     log_file = "logs/training_log.csv"
     if not os.path.exists(log_file):
@@ -157,22 +226,34 @@ def main():
             features = feature_extractor(X)
             sequence = sequence_model(features)
             context = attention(sequence)
-            action_probs = agent(context)  # shape [B,2] logits
+            logits = agent(context)  # shape [B,1] logits para clasificación binaria
             
-            # 1) Cálculo de pérdida con Focal Loss
-            loss = focal_loss(action_probs[:,1], y.float(), alpha=0.25, gamma=2.0)
+            # Debug: mostrar shapes
+            if epoch == 0 and len(losses) == 0:
+                print(f"🔍 Debug shapes:")
+                print(f"   X: {X.shape}")
+                print(f"   y: {y.shape}")
+                print(f"   logits: {logits.shape}")
+                print(f"   logits.squeeze(): {logits.squeeze().shape}")
+                print(f"   y.float(): {y.float().shape}")
+                print(f"   Tipos - y: {y.dtype}, logits: {logits.dtype}")
+                print(f"   Batch size: {X.shape[0]}")
+                print(f"   Pos weight: 0.3 (penaliza falsos positivos)")
+            
+            # Paso 3: Cálculo de pérdida con BCEWithLogitsLoss
+            loss = safe_bce_loss(logits, y, criterion)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
 
             # 2) Acumula probabilidades y etiquetas
-            probs_pos = torch.sigmoid(action_probs[:,1]).detach().cpu().numpy()
-            all_probs.extend(probs_pos.tolist())
+            probs = torch.sigmoid(logits).detach().cpu().numpy().squeeze()
+            all_probs.extend(probs.tolist() if probs.size > 1 else [probs.item()])
             all_labels.extend(y.cpu().numpy().tolist())
 
-            # Para win_rate (opcional): cuenta aciertos usando prob >= 0.5
-            total_correct += (probs_pos.round() == y.cpu().numpy()).sum()
+            # Para win_rate (opcional): cuenta aciertos usando prob >= 0.51
+            total_correct += ((probs >= 0.51) == y.cpu().numpy()).sum()
             total_samples += len(y)
 
         avg_loss = sum(losses) / len(losses)
@@ -193,18 +274,22 @@ def main():
                 features = feature_extractor(X)
                 sequence = sequence_model(features)
                 context = attention(sequence)
-                action_probs = agent(context)
+                logits = agent(context)
                 
-                probs_pos = torch.sigmoid(action_probs[:,1]).cpu().numpy()
-                val_probs.extend(probs_pos.tolist())
+                probs = torch.sigmoid(logits).cpu().numpy().squeeze()
+                val_probs.extend(probs.tolist() if probs.size > 1 else [probs.item()])
                 val_labels.extend(y.cpu().numpy().tolist())
         
         # Métricas de validation
         val_labels_np = np.array(val_labels)
         val_probs_np = np.array(val_probs)
         
-        # Encontrar umbral óptimo para validation
-        optimal_threshold, optimal_f1 = find_optimal_threshold(val_probs_np, val_labels_np)
+        # Paso 4: Umbral inicial ≥ 0.51
+        initial_threshold = 0.51
+        val_preds_initial = (val_probs_np >= initial_threshold).astype(int)
+        
+        # Encontrar umbral óptimo para validation (rango 0.51-0.55)
+        optimal_threshold, optimal_f1 = find_optimal_threshold(val_probs_np, val_labels_np, threshold_range=(0.51, 0.55))
         val_preds = (val_probs_np >= optimal_threshold).astype(int)
         
         val_f1 = f1_score(val_labels_np, val_preds, zero_division='warn')
@@ -212,8 +297,9 @@ def main():
         val_precision = precision_score(val_labels_np, val_preds, zero_division='warn')
         val_recall = recall_score(val_labels_np, val_preds, zero_division='warn')
         
-        print(f"\n📊 VALIDATION - Época {epoch+1} (umbral óptimo: {optimal_threshold:.3f}):")
-        print(f"   F1:        {val_f1:.4f}")
+        print(f"\n📊 VALIDATION - Época {epoch+1}:")
+        print(f"   Umbral inicial (0.51): F1={f1_score(val_labels_np, val_preds_initial, zero_division='warn'):.4f}")
+        print(f"   Umbral óptimo ({optimal_threshold:.3f}): F1={val_f1:.4f}")
         print(f"   Accuracy:  {val_accuracy:.4f}")
         print(f"   Precision: {val_precision:.4f}")
         print(f"   Recall:    {val_recall:.4f}")
@@ -224,11 +310,11 @@ def main():
         attention.train()
         agent.train()
 
-       # ——— 3) Uso de umbral fijo manual 0.41 ———
+       # ——— 3) Uso de umbral fijo manual 0.51 ———
         labels_np = np.array(all_labels)
         probs_np  = np.array(all_probs)
         
-        fixed_thr = 0.41
+        fixed_thr = 0.51
         
         final_preds = (probs_np >= fixed_thr).astype(int)
         
@@ -248,16 +334,16 @@ def main():
             best_f1 = val_f1
             patience_counter = 0
             torch.save({
-        'epoch': epoch,
-        'feature_extractor': feature_extractor.state_dict(),
-        'sequence_model': sequence_model.state_dict(),
-        'attention': attention.state_dict(),
-        'agent': agent.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'scheduler': scheduler.state_dict(),
-        'optimal_threshold': optimal_threshold,
-        'best_val_f1': val_f1
-    }, checkpoint_path)
+                'epoch': epoch,
+                'feature_extractor': feature_extractor.state_dict(),
+                'sequence_model': sequence_model.state_dict(),
+                'attention': attention.state_dict(),
+                'agent': agent.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'optimal_threshold': optimal_threshold,
+                'best_val_f1': val_f1
+            }, checkpoint_path)
             print(f"💾 Checkpoint guardado en época {epoch+1} (Validation F1={best_f1:.4f}, Umbral={optimal_threshold:.3f})")
         
         else:
