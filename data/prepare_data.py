@@ -63,6 +63,10 @@ def compute_indicators(df):
     bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2, fillna=True)
     df['bb_percent'] = (df['close'] - bb.bollinger_lband()) / (bb.bollinger_hband() - bb.bollinger_lband())
 
+    # Bollinger Bands Width
+    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2, fillna=True)
+    df['bollinger_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / df['close']
+
     # Candle features
     df['candle_body'] = abs(df['close'] - df['open'])
     df['upper_wick'] = df['high'] - df[['close', 'open']].max(axis=1)
@@ -82,6 +86,50 @@ def compute_indicators(df):
     df['volume_spike'] = (df['volume'] > df['volume'].rolling(20).mean() * 1.5).astype(int)
     df['institutional_volume_bar'] = (df['volume'] > df['volume'].rolling(50).mean() * 2).astype(int)
     
+    # 🔥 imbalance_ratio
+    if 'bid_volume' in df.columns and 'ask_volume' in df.columns:
+        df['imbalance_ratio'] = (df['bid_volume'] - df['ask_volume']) / (df['bid_volume'] + df['ask_volume'] + 1e-9)
+    else:
+        df['imbalance_ratio'] = 0.0
+
+    # ⚠️ sweep_detection
+    df['sweep_detection'] = ((df['volume'] > df['volume'].rolling(10).mean() * 3) & (df['close'] > df['open'])).astype(int)
+
+    # 💸 funding_rate (solo para BTC y ETH, simulado si no existe)
+    if 'funding_rate' in df.columns:
+        df['funding_rate'] = df['funding_rate']
+    else:
+        df['funding_rate'] = 0.0
+
+    # 🧊 price_spread_pct
+    if 'ask_price' in df.columns and 'bid_price' in df.columns:
+        df['price_spread_pct'] = (df['ask_price'] - df['bid_price']) / df['close']
+    else:
+        df['price_spread_pct'] = 0.0
+
+    # 💥 aggressive_volume_ratio
+    if 'market_buy_volume' in df.columns:
+        df['aggressive_volume_ratio'] = df['market_buy_volume'] / (df['volume'] + 1e-9)
+    else:
+        df['aggressive_volume_ratio'] = 0.0
+
+    # 🛑 stop_run_detector
+    df['stop_run_detector'] = ((df['high'] > df['high'].shift(1)) & (df['close'] < df['open'])).astype(int)
+
+    # Momentum 5
+    df['momentum_5'] = df['close'] / df['close'].shift(5) - 1
+
+    # RSI Cross
+    df['rsi_cross'] = ((df['rsi'] > 50) & (df['rsi'].shift(1) <= 50)).astype(int)
+
+    # 1. Señal anterior: predicción binaria del modelo anterior (o 0 al principio)
+    if 'prev_signal' not in df.columns:
+        df['prev_signal'] = 0  # por si corres desde cero
+    # 2. Desplazá una fila hacia abajo para que el valor del minuto anterior
+    df['previous_signal'] = df['prev_signal'].shift(1).fillna(0).astype(np.int8)
+    # 3. (opcional) eliminá 'prev_signal' si ya no la necesitás
+    df.drop(columns=['prev_signal'], inplace=True)
+
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(inplace=True)
 

@@ -2,29 +2,17 @@ data:
   inputs:
     - symbol: BTCUSDT
       timeframe: 1
-      path: data/dataset/marzo_2025/BTCUSDT_1m.csv
+      path: data/dataset/2025/BTCUSDT_1m.csv
     - symbol: BTCUSDT
       timeframe: 5
-      path: data/dataset/marzo_2025/BTCUSDT_5m.csv
+      path: data/dataset/2025/BTCUSDT_5m.csv
     - symbol: ETHUSDT
       timeframe: 1
-      path: data/dataset/marzo_2025/ETHUSDT_1m.csv
+      path: data/dataset/2025/ETHUSDT_1m.csv
     - symbol: ETHUSDT
       timeframe: 5
-      path: data/dataset/marzo_2025/ETHUSDT_5m.csv
-    - symbol: SOLUSDT
-      timeframe: 1
-      path: data/dataset/marzo_2025/SOLUSDT_1m.csv
-    - symbol: SOLUSDT
-      timeframe: 5
-      path: data/dataset/marzo_2025/SOLUSDT_5m.csv
-    - symbol: XRPUSDT
-      timeframe: 1
-      path: data/dataset/marzo_2025/XRPUSDT_1m.csv
-    - symbol: XRPUSDT
-      timeframe: 5
-      path: data/dataset/marzo_2025/XRPUSDT_5m.csv
-
+      path: data/dataset/2025/ETHUSDT_5m.csv
+  
   features:
     - open
     - high
@@ -57,18 +45,32 @@ data:
     - institutional_volume_bar
     - symbol_code
     - timeframe_code
+    - imbalance_ratio
+    - sweep_detection
+    - funding_rate
+    - price_spread_pct
+    - aggressive_volume_ratio
+    - stop_run_detector
+    - bollinger_width
+    - momentum_5
+    - rsi_cross
+    - previous_signal
 
   sequence_length: 60
 training:
-  optimizer: AdamW
-  learning_rate: 0.00003
-  loss_function: BCEWithLogitsLoss  # con class_weights si están disponibles
-  batch_size: 64
-  epochs: 30
+  loss_function: BCEWithLogitsLoss
+  learning_rate: 0.00025
+  min_learning_rate: 0.00009
+  batch_size: 256
+  epochs: 20
+  device: "cpu"
+  weight_decay: 0.0001
+  pos_weight: 2.0  # ajustar si el balance lo requiere
+  early_stopping_patience: 3
   scheduler:
-    type: CosineAnnealingLR
-    T_max: 30
-  device: "cpu"  # o "cuda" si usas GPU
+    type: WarmupCosineScheduler
+    warmup_steps: 1
+    total_steps: 10
 
 model:
   architecture: "CNN-LSTM-Attention"
@@ -76,10 +78,10 @@ model:
   lstm_hidden_size: 64
   lstm_layers: 3
   attention_heads: 4
-  dropout: 0.3
   sequence_length: 60
-  input_features: 30  # se calcula según tu lista de features arriba
-  output_size: 1  # binary classification (buy/sell signal)
+  input_features: 41 # se calcula según tu lista de features arriba
+  output_size: 1
+  dropout: 0.3  # binary classification (buy/sell signal)
 
 rl_agent:
   type: "ppo"  # Options: "ppo", "ddpg", "sac"

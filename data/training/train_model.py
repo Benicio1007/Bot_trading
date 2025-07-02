@@ -5,8 +5,11 @@ import os
 import sys
 from pathlib import Path
 import torch.nn as nn
+from math import pi, cos
+import numpy as np
+import argparse
 
-# Agregar el directorio padre al path para poder importar los módulos
+
 sys.path.append(str(Path(__file__).parent.parent))
 
 from modelos.feature_extractor import CNNFeatureExtractor
@@ -19,9 +22,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from collections import Counter
 from torch.utils.data import WeightedRandomSampler
 import torch.nn.functional as F
-import numpy as np
-
-
+from training.scheduler import WarmupCosineScheduler
 
 def focal_loss(logits, targets, alpha=0.45, gamma=2.0):
     # Asegurar que las dimensiones sean correctas
@@ -57,9 +58,11 @@ def find_optimal_threshold(probs, labels, threshold_range=(0.40, 0.60), step=0.0
     return best_threshold, best_f1
 
 # Paso 3: Pérdida con castigo a falsos positivos
-def create_bce_criterion(device):
-    """Crea BCEWithLogitsLoss con pos_weight para penalizar falsos positivos"""
-    pos_weight = torch.tensor([2.2]).to(device)  # Menos de 1 → penaliza FP
+def create_bce_criterion(device, labels):
+    n_pos = sum(labels)
+    n_neg = len(labels) - n_pos
+    pos_weight = torch.tensor([n_neg / (n_pos + 1e-9)]).to(device)
+    print(f"[DEBUG] pos_weight dinámico: {pos_weight.item():.4f}")
     return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
 def safe_bce_loss(logits, targets, criterion):
@@ -89,17 +92,154 @@ def safe_bce_loss(logits, targets, criterion):
     
     return criterion(logits_flat, targets_flat)
 
+def train_one_epoch(train_dataloader, feature_extractor, sequence_model, attention, agent, optimizer, criterion, device):
+    feature_extractor.train()
+    sequence_model.train()
+    attention.train()
+    agent.train()
+    total_loss = 0
+    all_probs = []
+    all_labels = []
+    all_logits = []
+    total_correct = 0
+    total_samples = 0
+    for X, y in train_dataloader:
+        X, y = X.to(device), y.to(device)
+        features = feature_extractor(X)
+        sequence = sequence_model(features)
+        context = attention(sequence)
+        logits = agent(context)
+        loss = safe_bce_loss(logits, y, criterion)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+        # Acumula probabilidades, logits y etiquetas
+        probs = torch.sigmoid(logits).detach().cpu().numpy().squeeze()
+        all_probs.extend(probs.tolist() if hasattr(probs, 'size') and probs.size > 1 else [float(probs)])
+        all_logits.extend(logits.detach().cpu().numpy().squeeze().tolist() if hasattr(probs, 'size') and probs.size > 1 else [float(logits.detach().cpu().numpy().squeeze())])
+        all_labels.extend(y.cpu().numpy().tolist())
+        # Winrate (prob >= 0.51)
+        total_correct += ((probs >= 0.51) == y.cpu().numpy()).sum() if hasattr(probs, 'size') and probs.size > 1 else int((probs >= 0.51) == y.cpu().numpy())
+        total_samples += len(y)
+    avg_loss = total_loss / len(train_dataloader)
+    win_rate = total_correct / total_samples if total_samples else 0
+    # Métricas
+    labels_np = np.array(all_labels)
+    if labels_np.dtype != int and labels_np.dtype != bool:
+        labels_np = (labels_np >= 0.5).astype(int)
+    probs_np  = np.array(all_probs)
+    fixed_thr = 0.55
+    final_preds = (probs_np >= fixed_thr).astype(int)
+    accuracy  = accuracy_score(labels_np, final_preds)
+    precision = precision_score(labels_np, final_preds, zero_division='warn')
+    recall    = recall_score(labels_np, final_preds, zero_division='warn')
+    f1_score_val = f1_score(labels_np, final_preds, zero_division='warn')
+    cm        = confusion_matrix(labels_np, final_preds)
+    print(f"\n📈 Métricas de entrenamiento (umbral fijo {fixed_thr:.2f}):")
+    print(f"   F1:        {f1_score_val:.4f}")
+    print(f"   Accuracy:  {accuracy:.4f}")
+    print(f"   Precision: {precision:.4f}")
+    print(f"   Recall:    {recall:.4f}")
+    print(f"   Win Rate:  {win_rate:.4f}")
+    print(f"   Matriz de confusión:\n{cm}")
+    print(f"[DEBUG] Media de predicciones (sigmoid): {np.mean(all_probs):.4f}")
+    print(f"[DEBUG] Media de logits: {np.mean(all_logits):.4f}")
+    return avg_loss
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--freeze', action='store_true', help='Congela y descongela capas en dos fases')
+    parser.add_argument('--lr', type=float, default=None, help='Learning rate para el optimizador')
+    parser.add_argument('--epochs', type=int, default=None, help='Cantidad de épocas de entrenamiento')
+    parser.add_argument('--resume', type=str, default=None, help='Ruta de checkpoint para reanudar entrenamiento')
+    parser.add_argument('--save-as', type=str, default=None, help='Ruta para guardar el checkpoint final')
+    args = parser.parse_args()
     config = load_config("data/config/config.yaml")
     device = torch.device(config['training']['device'])
-    
     # División temporal del dataset
     train_indices, validation_indices = split_dataset_temporally(config, validation_split=0.2)
-    
     # Crear datasets separados
     full_dataset = CustomDataset(config)
     train_dataset = torch.utils.data.Subset(full_dataset, train_indices)
     validation_dataset = torch.utils.data.Subset(full_dataset, validation_indices)
+    train_dataloader = DataLoader(train_dataset,
+                                 batch_size=config['training']['batch_size'],
+                                 shuffle=True)
+    validation_dataloader = DataLoader(validation_dataset,
+                                      batch_size=config['training']['batch_size'],
+                                      shuffle=False)
+    feature_extractor = CNNFeatureExtractor(config).to(device)
+    sequence_model = SequenceModel(config).to(device)
+    attention = AttentionBlock(config).to(device)
+    agent = PPOAgent(config).to(device)
+    # Leer hiperparámetros del config
+    pos_weight = torch.tensor([config['training'].get('pos_weight', 1.0)]).to(device)
+    early_stopping_patience = config['training'].get('early_stopping_patience', 5)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # Usar learning rate del argumento si se pasa, si no el del config
+    lr = args.lr if args.lr is not None else config['training']['learning_rate']
+    optimizer = torch.optim.Adam(list(feature_extractor.parameters()) +
+                                 list(sequence_model.parameters()) +
+                                 list(attention.parameters()) +
+                                 list(agent.parameters()),
+                                 lr=lr,
+                                 weight_decay=0.0001)
+    # Scheduler WarmupCosineScheduler
+    scheduler_config = config['training'].get('scheduler', {})
+    warmup_steps = scheduler_config.get('warmup_steps', 1)
+    total_steps = scheduler_config.get('total_steps', config['training']['epochs'])
+    min_lr = config['training'].get('min_learning_rate', 0.00009)
+    scheduler = WarmupCosineScheduler(optimizer, warmup_steps, total_steps, min_lr=min_lr)
+    # Epochs
+    epochs = args.epochs if args.epochs is not None else config['training']['epochs']
+    # Checkpoint paths
+    checkpoint_path = args.save_as if args.save_as is not None else "checkpoints/model_last.pt"
+    resume_path = args.resume
+    start_epoch = 0
+    if resume_path is not None and os.path.exists(resume_path):
+        print(f"✅ Checkpoint encontrado en {resume_path}. Cargando modelo...")
+        checkpoint = torch.load(resume_path, weights_only=False)
+        feature_extractor.load_state_dict(checkpoint['feature_extractor'])
+        sequence_model.load_state_dict(checkpoint['sequence_model'])
+        attention.load_state_dict(checkpoint['attention'])
+        agent.load_state_dict(checkpoint['agent'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        if 'epoch' in checkpoint:
+            start_epoch = checkpoint['epoch'] + 1
+        print(f"✅ Checkpoint cargado exitosamente desde época {checkpoint.get('epoch', 0)}")
+    if args.freeze:
+        # 1. Congelar todo menos conv1 y fc2
+        for name, param in feature_extractor.named_parameters():
+            if not name.startswith("conv1"):
+                param.requires_grad = False
+        for name, param in agent.named_parameters():
+            if not name.startswith("fc2"):
+                param.requires_grad = False
+        for name, param in sequence_model.named_parameters():
+            param.requires_grad = False
+        for name, param in attention.named_parameters():
+            param.requires_grad = False
+        # Optimizer solo con params entrenables
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, list(feature_extractor.parameters()) + list(sequence_model.parameters()) + list(attention.parameters()) + list(agent.parameters())),
+                                     lr=1e-4, weight_decay=1e-4)
+        print("🔒 Entrenando solo conv1 y fc2 (1 época)")
+        train_one_epoch(train_dataloader, feature_extractor, sequence_model, attention, agent, optimizer, criterion, device)
+        # 2. Descongelar todo y bajar LR
+        for p in feature_extractor.parameters():
+            p.requires_grad = True
+        for p in sequence_model.parameters():
+            p.requires_grad = True
+        for p in attention.parameters():
+            p.requires_grad = True
+        for p in agent.parameters():
+            p.requires_grad = True
+        for g in optimizer.param_groups:
+            g['lr'] = 3e-5
+        print("🔓 Entrenando todo el modelo (1 época)")
+        train_one_epoch(train_dataloader, feature_extractor, sequence_model, attention, agent, optimizer, criterion, device)
+        print("✅ Fases de freezing/desfreezing completadas. Continúa entrenamiento normal si lo deseas.")
+        return
     
     print(f"Tamaño del dataset completo: {len(full_dataset)}")
     print(f"Tamaño del dataset de training: {len(train_dataset)}")
@@ -149,8 +289,8 @@ def main():
     agent.fc2.bias.data.zero_()
     print("🔄 Capa final reiniciada: bias=0, weights~N(0,0.01)")
     
-    # Paso 3: Crear criterio de pérdida con castigo a falsos positivos
-    criterion = create_bce_criterion(device)
+    # Paso 3: Crear criterio de pérdida con pos_weight fijo en 2.0
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.0]).to(device))
     
     optimizer = torch.optim.Adam(list(feature_extractor.parameters()) +
                                  list(sequence_model.parameters()) +
@@ -159,27 +299,8 @@ def main():
                                  lr=config['training']['learning_rate'],
                                  weight_decay=0.0001)
     
-    # Ajustar learning rate a 0.001 para 2021 (Bull market)
-    optimizer.param_groups[0]["lr"] = 0.001
-    
-    # Scheduler para reducir learning rate cuando F1 se estanca
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=3, min_lr=1e-5
-    )
-    
-    print(f"🚀 Scheduler configurado:")
-    print(f"   Tipo: ReduceLROnPlateau")
-    print(f"   Modo: max (monitorea F1 score)")
-    print(f"   Factor: 0.5 (reduce LR a la mitad)")
-    print(f"   Patience: 3 épocas")
-    print(f"   Min LR: 1e-5")
-    print(f"   Learning Rate inicial: {optimizer.param_groups[0]['lr']:.6f}")
-    print(f"   Weight Decay: {optimizer.param_groups[0]['weight_decay']:.6f}")
-    print(f"   Early Stopping Patience: 5 épocas")
-    print(f"   Configuración: 2021 Bull Market (LR=0.001, Dropout=0.3, WD=0.0001)")
-    print(f"   Clasificación: Binaria (1 logit + sigmoid)")
-    print(f"   Pérdida: BCEWithLogitsLoss(pos_weight=0.3)")
-    print(f"   Umbral inicial: 0.51")
+    # Forzar learning rate inicial a 0.0008
+    optimizer.param_groups[0]["lr"] = 0.0008
     
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
     Path("logs").mkdir(parents=True, exist_ok=True)
@@ -196,8 +317,6 @@ def main():
         attention.load_state_dict(checkpoint['attention'])
         agent.load_state_dict(checkpoint['agent'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        if 'scheduler' in checkpoint:
-            scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch = checkpoint['epoch'] + 1
         print(f"✅ Checkpoint cargado exitosamente desde época {checkpoint['epoch']}")
 
@@ -213,20 +332,22 @@ def main():
     patience_counter = 0
 
         # Entrenamiento
-    for epoch in range(start_epoch, config['training']['epochs']):
+    for epoch in range(start_epoch, epochs):
         total_correct = 0
         total_samples = 0
         losses = []
         all_probs = []
         all_labels = []
+        all_logits = []
 
         # ——— Loop de batches ———
         for X, y in train_dataloader:
             X, y = X.to(device), y.to(device)
+            # No mixup en Q4 2024
             features = feature_extractor(X)
             sequence = sequence_model(features)
             context = attention(sequence)
-            logits = agent(context)  # shape [B,1] logits para clasificación binaria
+            logits = agent(context)
             
             # Debug: mostrar shapes
             if epoch == 0 and len(losses) == 0:
@@ -238,7 +359,6 @@ def main():
                 print(f"   y.float(): {y.float().shape}")
                 print(f"   Tipos - y: {y.dtype}, logits: {logits.dtype}")
                 print(f"   Batch size: {X.shape[0]}")
-                print(f"   Pos weight: 0.3 (penaliza falsos positivos)")
             
             # Paso 3: Cálculo de pérdida con BCEWithLogitsLoss
             loss = safe_bce_loss(logits, y, criterion)
@@ -247,9 +367,10 @@ def main():
             optimizer.step()
             losses.append(loss.item())
 
-            # 2) Acumula probabilidades y etiquetas
+            # 2) Acumula probabilidades, logits y etiquetas
             probs = torch.sigmoid(logits).detach().cpu().numpy().squeeze()
             all_probs.extend(probs.tolist() if probs.size > 1 else [probs.item()])
+            all_logits.extend(logits.detach().cpu().numpy().squeeze().tolist() if probs.size > 1 else [logits.detach().cpu().numpy().squeeze().item()])
             all_labels.extend(y.cpu().numpy().tolist())
 
             # Para win_rate (opcional): cuenta aciertos usando prob >= 0.51
@@ -285,7 +406,7 @@ def main():
         val_probs_np = np.array(val_probs)
         
         # Paso 4: Umbral inicial ≥ 0.51
-        initial_threshold = 0.51
+        initial_threshold = 0.55
         val_preds_initial = (val_probs_np >= initial_threshold).astype(int)
         
         # Encontrar umbral óptimo para validation (rango 0.51-0.55)
@@ -312,9 +433,12 @@ def main():
 
        # ——— 3) Uso de umbral fijo manual 0.51 ———
         labels_np = np.array(all_labels)
+        # Binarizar labels si son continuos (por mixup)
+        if labels_np.dtype != int and labels_np.dtype != bool:
+            labels_np = (labels_np >= 0.5).astype(int)
         probs_np  = np.array(all_probs)
         
-        fixed_thr = 0.51
+        fixed_thr = 0.55
         
         final_preds = (probs_np >= fixed_thr).astype(int)
         
@@ -340,7 +464,6 @@ def main():
                 'attention': attention.state_dict(),
                 'agent': agent.state_dict(),
                 'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict(),
                 'optimal_threshold': optimal_threshold,
                 'best_val_f1': val_f1
             }, checkpoint_path)
@@ -352,20 +475,10 @@ def main():
                 print(f"⛔️ Early stopping en época {epoch+1}. Mejor Validation F1: {best_f1:.4f}")
                 break
 
-        # Actualizar learning rate con scheduler basado en validation F1
-        old_lr = optimizer.param_groups[0]['lr']
-        scheduler.step(val_f1)
-        new_lr = optimizer.param_groups[0]['lr']
-        
-        if new_lr != old_lr:
-            print(f"🔄 Learning Rate reducido: {old_lr:.6f} → {new_lr:.6f}")
-        else:
-            print(f"📈 Learning Rate actual: {new_lr:.6f}")
-
         # ➕ Guardado de logs en CSV
         with open(log_file, mode='a', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow([epoch + 1, avg_loss, win_rate, val_f1, new_lr, optimal_threshold])
+            writer.writerow([epoch + 1, avg_loss, win_rate, val_f1, lr, optimal_threshold])
 
         # ——— 5) Impresión estándar cada época ———
         print(f"📊 Epoch {epoch+1}: Loss = {avg_loss:.4f}, Win Rate = {win_rate:.2%}")
@@ -379,11 +492,14 @@ def main():
                 'attention': attention.state_dict(),
                 'agent': agent.state_dict(),
                 'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict(),
                 'optimal_threshold': optimal_threshold,
                 'best_val_f1': val_f1
             }, checkpoint_path)
             print(f"💾 Checkpoint (backup) guardado en época {epoch+1}")
+
+        # Debug: imprime media de predicciones y logits
+        print(f"[DEBUG] Media de predicciones (sigmoid): {np.mean(all_probs):.4f}")
+        print(f"[DEBUG] Media de logits: {np.mean(all_logits):.4f}")
 
 if __name__ == "__main__":
     main()

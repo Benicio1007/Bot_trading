@@ -34,7 +34,7 @@ from data.prepare_data import compute_indicators
 
 
 # 📌 Configuración
-SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'SOL/USDT']  # Lista de activos
+SYMBOLS = ['BTC/USDT', 'ETH/USDT']  # Lista de activos
 INTERVAL = '1m'
 CAPITAL_TOTAL = 1000
 LEVERAGE = 30

@@ -41,22 +41,26 @@ class CustomDataset(Dataset):
             df.loc[df['close'] < df['open'], 'candle_type'] = -1
 
             # Agregar symbol_code y timeframe_code
-            symbol_map = {'BTCUSDT': 0, 'ETHUSDT': 1, 'SOLUSDT': 2, 'XRPUSDT': 3}
+            symbol_map = {'BTCUSDT': 0, 'ETHUSDT': 1,}
             symbol = input_cfg['symbol']
             df['symbol_code'] = symbol_map.get(symbol, -1)
             df['timeframe_code'] = input_cfg['timeframe']
 
-            # Chequeo: mostrar columnas presentes y faltantes
-            missing = [col for col in config['data']['features'] if col not in df.columns]
+            # Esta función cubre features clásicos y nuevos (como bollinger_width, momentum_5, rsi_cross, previous_signal)
+            def feature_present(col):
+                return (
+                    col in df.columns or
+                    f"{col}_1m" in df.columns or
+                    f"{col}_5m" in df.columns
+                )
+            missing = [col for col in config['data']['features'] if not feature_present(col)]
             print(f"Archivo: {file_path}")
             print(f"Features presentes: {list(df.columns)}")
             if missing:
                 raise ValueError(f"🚨 Faltan features requeridos: {missing} en archivo {file_path}")
-
             else:
                 print("Todos los features requeridos están presentes.\n")
-
-            if not all(col in df.columns for col in config['data']['features']):
+            if not all(feature_present(col) for col in config['data']['features']):
                 continue
 
             if df.empty:
