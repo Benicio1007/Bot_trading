@@ -1,12 +1,41 @@
 Fecha (UTC),Evento,Importancia,Fuente
-2025-05-07 18:00:00,Decisión de tasas de interés (FOMC),Alta,Federal Reserve
-2025-05-14 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
-2025-05-16 12:30:00,Índice de Precios al Productor (PPI),Alta,Bureau of Labor Statistics
-2025-05-24 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
-2025-06-05 12:30:00,Solicitudes iniciales de desempleo,Media,Department of Labor
-2025-06-12 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
-2025-06-18 18:00:00,Decisión de tasas de interés (FOMC),Alta,Federal Reserve
-2025-06-21 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
+
 2025-07-03 12:30:00,Solicitudes iniciales de desempleo,Media,Department of Labor
+2025-07-05 14:00:00,ISM Servicios PMI,Alta,Institute for Supply Management
 2025-07-10 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
+2025-07-11 12:30:00,Índice de Precios al Productor (PPI),Alta,Bureau of Labor Statistics
+2025-07-16 12:30:00,Ventas minoristas,Alta,Census Bureau
+2025-07-18 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
 2025-07-30 18:00:00,Decisión de tasas de interés (FOMC),Alta,Federal Reserve
+
+2025-08-01 12:30:00,Reporte de empleo (NFP),Alta,Bureau of Labor Statistics
+2025-08-06 14:00:00,ISM Servicios PMI,Alta,Institute for Supply Management
+2025-08-08 12:30:00,Índice de Precios al Productor (PPI),Alta,Bureau of Labor Statistics
+2025-08-13 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
+2025-08-15 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
+2025-08-22 14:00:00,Jackson Hole Symposium (Discurso de Powell),Alta,Federal Reserve
+
+2025-09-06 12:30:00,Reporte de empleo (NFP),Alta,Bureau of Labor Statistics
+2025-09-11 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
+2025-09-12 12:30:00,Índice de Precios al Productor (PPI),Alta,Bureau of Labor Statistics
+2025-09-13 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
+2025-09-18 18:00:00,Decisión de tasas de interés (FOMC),Alta,Federal Reserve
+
+2025-10-04 12:30:00,Reporte de empleo (NFP),Alta,Bureau of Labor Statistics
+2025-10-10 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
+2025-10-11 12:30:00,Índice de Precios al Productor (PPI),Alta,Bureau of Labor Statistics
+2025-10-15 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
+2025-10-31 14:00:00,Índice de costo de empleo (ECI),Alta,Bureau of Labor Statistics
+
+2025-11-01 12:30:00,Reporte de empleo (NFP),Alta,Bureau of Labor Statistics
+2025-11-07 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
+2025-11-08 12:30:00,Índice de Precios al Productor (PPI),Alta,Bureau of Labor Statistics
+2025-11-13 18:00:00,Decisión de tasas de interés (FOMC),Alta,Federal Reserve
+2025-11-15 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
+
+2025-12-06 12:30:00,Reporte de empleo (NFP),Alta,Bureau of Labor Statistics
+2025-12-11 12:30:00,Índice de Precios al Consumidor (CPI),Alta,Bureau of Labor Statistics
+2025-12-12 12:30:00,Índice de Precios al Productor (PPI),Alta,Bureau of Labor Statistics
+2025-12-18 18:00:00,Decisión de tasas de interés (FOMC),Alta,Federal Reserve
+2025-12-20 14:00:00,Confianza del consumidor (Universidad de Michigan),Media,University of Michigan
+

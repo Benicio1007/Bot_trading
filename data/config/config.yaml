@@ -71,6 +71,7 @@ training:
     type: WarmupCosineScheduler
     warmup_steps: 1
     total_steps: 10
+  fixed_threshold: 0.35
 
 model:
   architecture: "CNN-LSTM-Attention"

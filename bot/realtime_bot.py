@@ -1,16 +1,16 @@
 import time
 import pandas as pd
 from datetime import datetime, timezone
-from broker import PaperBroker
+from bot.broker import PaperBroker
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import csv
 import os
 import socket
-import telegram_utils.pnl_telegram as state
-from telegram_utils import telegram_bot
-from telegram_utils import pnl_telegram
+import sheets.telegram_utils.pnl_telegram as state
+from sheets.telegram_utils import telegram_bot
+from sheets.telegram_utils import pnl_telegram
 import threading
 import asyncio
 import os
@@ -24,10 +24,9 @@ from data.modelos.feature_extractor import CNNFeatureExtractor
 from data.modelos.sequence_model import SequenceModel
 from data.modelos.attention_layer import AttentionBlock
 from data.modelos.drl_agent import PPOAgent
-from data.training.utils import load_config
+from data.training.utils import load_config, normalize
 import numpy as np
 import torch.nn.functional as F
-from data.training.utils import load_config, normalize
 from data.prepare_data import compute_indicators
 
 
@@ -39,8 +38,8 @@ INTERVAL = '1m'
 CAPITAL_TOTAL = 1000
 LEVERAGE = 30
 POSITION_RATIO = 0.20
-TP_PORCENTAJE = 0.004  # 0.4%
-SL_PORCENTAJE = 0.002  # 0.2%
+TP_PORCENTAJE = 0.0045  # 0.45%
+SL_PORCENTAJE = 0.0025  # 0.25%
 COMISION_PORCENTAJE = 0.0004
 MIN_NOTIONAL = 100
 MAX_CICLOS = 20
@@ -61,14 +60,10 @@ operations = {'open': False, 'symbol': None, 'entry_price': None,
 # 🔧 Inicialización
 bot = PaperBroker()
 # justo después de cargar el config
-config = load_config("data/config/config.yaml")
-
-# Forzar features necesarios para la inferencia del modelo
-config['data']['features'] = ['open', 'high', 'low', 'close', 'volume']
-
+config = load_config(os.path.join(os.path.dirname(__file__), "..", "data", "config", "config.yaml"))
 
 # 📜 Crear archivo CSV si no existe
-csv_file = 'sheets.operaciones.csv'
+csv_file = os.path.join(os.path.dirname(__file__), "..", "sheets.operaciones.csv")
 if not os.path.isfile(csv_file):
     with open(csv_file, mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -80,9 +75,12 @@ if not os.path.isfile(csv_file):
 # Métricas en vivo
 metrics = {'total_trades': 0, 'wins': 0, 'losses': 0, 'pnl_sum': 0}
 
-def esta_en_consolidacion(df, umbral=0.002):
-    rango = df['high'].iloc[-5:].max() - df['low'].iloc[-5:].min()
-    return (rango / df['close'].iloc[-1]) < umbral
+def esta_en_consolidacion(df, umbral_pct=0.0035, vol_factor=0.5):
+    rango_pct = (df['high'].iloc[-5:].max() - df['low'].iloc[-5:].min()) / df['close'].iloc[-1]
+    vol_avg   = df['volume'].iloc[-100:].mean()
+    vol_now   = df['volume'].iloc[-1]
+    return (rango_pct < umbral_pct) and (vol_now < vol_avg * vol_factor)
+
 
 
 def esperar_internet(reintentos=99999, espera=10):
@@ -110,7 +108,7 @@ def guardar_operacion(tipo, activo, entrada, salida, resultado, pnl_neto, comisi
 
 
 def enviar_informe_mensual():
-    ruta_informe = os.path.join("informe", "informe_mensual.html")
+    ruta_informe = os.path.join(os.path.dirname(__file__), "..", "informe", "informe_mensual.html")
 
     if not os.path.exists(ruta_informe):
         print("❌ No se encontró el informe mensual HTML.")
@@ -140,13 +138,14 @@ def convertir_a_df(ohlcv):
     return df
 
 
-def hay_evento_economico_cercano_local(now, minutos=15):
+def hay_evento_economico_cercano_local(now, minutos_antes=15, minutos_despues=30):
     try:
-        with open('eventos_economicos_usa_2025.csv', newline='', encoding='utf-8') as csvfile:
+        with open(os.path.join(os.path.dirname(__file__), "..", "eventos_economicos_usa_2025.csv"), newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
                 evento_dt = datetime.strptime(row['Fecha (UTC)'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-                if abs((now - evento_dt).total_seconds()) <= minutos * 60:
+                delta = (now - evento_dt).total_seconds() / 60
+                if -minutos_antes <= delta <= minutos_despues:
                     print(f"🚨 Evento cercano detectado: {row['Evento']} ({evento_dt})")
                     return True
     except Exception as e:
@@ -202,14 +201,15 @@ def generar_senal_ia(df, symbol="BTC/USDT", interval="1m"):
         sequence = sequence_model(features)
         context = attention(sequence)
         logits = agent(context)
-        prob = torch.sigmoid(logits[:, 1]).item()
+        prob = torch.sigmoid(logits.squeeze()).item()
 
-    if prob >= 0.59:
-        return 1
-    elif prob <= 0.41:
-        return -1
+    fixed_threshold = config['training'].get('fixed_threshold', 0.35)
+    if prob >= fixed_threshold:
+        return 1  
+    elif prob <= (1 - fixed_threshold):
+        return -1  
     else:
-        return 0
+        return 0  
 
 
 
@@ -220,7 +220,7 @@ sequence_model = SequenceModel(config).to(device)
 attention = AttentionBlock(config).to(device)
 agent = PPOAgent(config).to(device)
 
-checkpoint = torch.load("checkpoints/model_last.pt", map_location=device)
+checkpoint = torch.load(os.path.join(os.path.dirname(__file__), "..", "checkpoints", "model_last.pt"), map_location=device, weights_only=False)
 feature_extractor.load_state_dict(checkpoint['feature_extractor'])
 sequence_model.load_state_dict(checkpoint['sequence_model'])
 attention.load_state_dict(checkpoint['attention'])
@@ -247,11 +247,6 @@ asyncio.run(telegram_bot.run_telegram_bot())
 
 
 while True:
-
-    if esta_en_consolidacion(df):
-        print("⏸️ Zona de consolidación detectada. Trade evitado.")
-        continue
-
 
     if telegram_bot.bot_pausado:
         print("⏸️ Bot pausado por Telegram...")
@@ -286,20 +281,31 @@ while True:
 
        
         if not operations['open'] and volatility_candle_count % VOLATILITY_CICLOS == 0:
-            vols = {}
+            ranking = []
             for sym in SYMBOLS:
                 data = convertir_a_df(bot.fetch_ohlcv(sym, INTERVAL, limit=VOLATILITY_CICLOS))
-                vols[sym] = (data['close'].pct_change().abs().mean())
-            # filtro volatilidad extrema
-            filtered = {s: v for s, v in vols.items() if v < EXTREME_VOLATILITY_THRESHOLD}
+                vola = data['close'].pct_change().abs().mean()
+                # Obtener volumen del último candle (liquidez)
+                vol = data['volume'].iloc[-1]
+                score = vola * np.log(vol + 1)
+                ranking.append((score, sym, vola, vol))
+            ranking.sort(reverse=True)
+            # filtro volatilidad extrema (opcional, si querés mantenerlo)
+            filtered = [r for r in ranking if r[2] < EXTREME_VOLATILITY_THRESHOLD]
             if not filtered:
-                filtered = vols
-            symbol = max(list(filtered.keys()), key=lambda k: filtered[k])
-            print(f"🔄 Activo seleccionado: {symbol} con volatilidad {vols[symbol]:.4f}")
+                filtered = ranking
+            score, symbol, vola, vol = filtered[0]
+            print(f"🔄 Activo seleccionado: {symbol} | Score={score:.6f} | Volatilidad={vola:.4f} | Volumen={vol:.2f}")
 
         
         ohlcv = bot.fetch_ohlcv(symbol, INTERVAL, limit=100)
         df = convertir_a_df(ohlcv)
+        
+        if esta_en_consolidacion(df):
+            print("⏸️ Zona de consolidación detectada. Trade evitado.")
+            continue
+
+        timer.start("Generación de señal")
         signal = generar_senal_ia(df, symbol=symbol, interval=INTERVAL)
         last = df.iloc[-1]
         ts = last['timestamp']
@@ -429,7 +435,7 @@ while True:
             
 
         
-        if not operations['open'] and signal in [1,-1] and safe and not hay_evento_economico_cercano_local(now_utc,15):
+        if not operations['open'] and signal in [1,-1] and safe and not hay_evento_economico_cercano_local(now_utc,15,30):
             side = 'buy' if signal==1 else 'sell'
             riesgo_actual = POSITION_RATIO * (1 - min(bot.get_drawdown(), 0.5))
             capital = CAPITAL_TOTAL * riesgo_actual
@@ -437,9 +443,26 @@ while True:
             price = df['close'].iloc[-1]
             if qty*price >= MIN_NOTIONAL:
                 timer.start("Ejecución de orden")
-                bot.place_order(symbol, side, qty)
-                timer.stop("Ejecución de orden")
-                
+                spread_pct = (ask - bid) / bid * 100 if bid else None
+                order = None
+                order_price = None
+                if spread_pct is not None and spread_pct > 0.02:
+                    # Orden limit/post-only
+                    order_price = ask if side == 'buy' else bid
+                    order = bot.place_order(symbol, side, qty, price=order_price, order_type='limit')
+                    print(f"📝 Orden LIMIT enviada: {side} {qty} {symbol} @ {order_price:.4f} (spread {spread_pct:.4f}%)")
+                else:
+                    # Orden de mercado
+                    order = bot.place_order(symbol, side, qty, order_type='market')
+                    print(f"📝 Orden MARKET enviada: {side} {qty} {symbol} (spread {spread_pct:.4f}%)")
+
+                # Loguear después de la ejecución
+                if order:
+                    executed_price = order.get('price', order_price if order_price is not None else price)
+                    fee = executed_price * qty * COMISION_PORCENTAJE if executed_price else None
+                    funding = 0  # Simulado o real si tienes acceso
+                    print(f"✅ Ejecutado: {side} {qty} {symbol} @ {executed_price} | Fee: {fee:.4f} | Funding: {funding:.4f}")
+
                 timer.start("Notificación Telegram")
                 run_async(telegram_bot.notificar_operacion_abierta(symbol, side, qty, price))
                 timer.stop("Notificación Telegram")
