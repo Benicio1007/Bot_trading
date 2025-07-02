@@ -1,0 +1,77 @@
+# =============================================================================
+# BOT TRADING - DEPENDENCIAS COMPLETAS
+# =============================================================================
+
+# =============================================================================
+# CORE - MACHINE LEARNING & DATA SCIENCE
+# =============================================================================
+torch>=2.0.0                    # PyTorch para modelos de IA
+numpy>=1.21.0                   # Computación numérica
+pandas>=1.3.0                   # Manipulación de datos
+scikit-learn>=1.0.0             # Métricas y utilidades ML
+scipy>=1.7.0                    # Optimización y funciones especiales
+
+# =============================================================================
+# TRADING & EXCHANGE
+# =============================================================================
+ccxt>=4.0.0                     # Biblioteca para exchanges (Binance)
+
+# =============================================================================
+# TECHNICAL ANALYSIS
+# =============================================================================
+ta>=0.10.0                      # Indicadores técnicos (RSI, MACD, etc.)
+
+# =============================================================================
+# CONFIGURATION & UTILITIES
+# =============================================================================
+pyyaml>=6.0                     # Archivos de configuración YAML
+tqdm>=4.60.0                    # Barras de progreso
+
+# =============================================================================
+# TELEGRAM INTEGRATION
+# =============================================================================
+python-telegram-bot>=20.0       # Bot de Telegram
+
+# =============================================================================
+# GOOGLE SHEETS INTEGRATION
+# =============================================================================
+gspread>=5.0.0                  # Google Sheets API
+google-auth>=2.0.0              # Autenticación Google
+google-auth-oauthlib>=1.0.0     # OAuth para Google
+google-auth-httplib2>=0.1.0     # HTTP para Google Auth
+
+# =============================================================================
+# VISUALIZATION & REPORTING
+# =============================================================================
+matplotlib>=3.5.0               # Gráficos y visualización
+
+# =============================================================================
+# REINFORCEMENT LEARNING
+# =============================================================================
+gym>=0.21.0                     # Entornos para RL (opcional)
+
+# =============================================================================
+# DEVELOPMENT & TESTING
+# =============================================================================
+pytest>=7.0.0                 # Testing (descomenta si necesitas)
+black>=22.0.0                 # Formateo de código (descomenta si necesitas)
+
+# =============================================================================
+# NOTAS DE INSTALACIÓN
+# =============================================================================
+# 1. Instalar todas las dependencias:
+#    pip install -r requirements.txt
+#
+# 2. Para desarrollo, instalar también las dependencias comentadas
+#
+# 3. Si tienes problemas con torch, instala desde:
+#    https://pytorch.org/get-started/locally/
+#
+# 4. Para Google Sheets, necesitas configurar credenciales:
+#    - Crear proyecto en Google Cloud Console
+#    - Habilitar Google Sheets API
+#    - Descargar archivo JSON de credenciales
+#
+# 5. Para Telegram, necesitas un token de bot:
+#    - Hablar con @BotFather en Telegram
+#    - Crear bot y obtener token 
