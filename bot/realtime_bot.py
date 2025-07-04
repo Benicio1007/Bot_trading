@@ -28,6 +28,7 @@ from data.training.utils import load_config, normalize
 import numpy as np
 import torch.nn.functional as F
 from data.prepare_data import compute_indicators
+import ta
 
 
 
@@ -56,6 +57,7 @@ now_utc = datetime.now(timezone.utc)
 close_position = False
 operations = {'open': False, 'symbol': None, 'entry_price': None,
               'side': None, 'qty': None, 'ts_entry': None, 'candles': 0}
+last_selected_symbol = None  # 🔥 Variable global para rotación
 
 # 🔧 Inicialización
 bot = PaperBroker()
@@ -75,11 +77,36 @@ if not os.path.isfile(csv_file):
 # Métricas en vivo
 metrics = {'total_trades': 0, 'wins': 0, 'losses': 0, 'pnl_sum': 0}
 
-def esta_en_consolidacion(df, umbral_pct=0.0035, vol_factor=0.5):
+def esta_en_consolidacion(df, umbral_pct=0.0015, vol_factor=0.3):
+    """
+    🔥 Filtro MUY LIGHT de consolidación para mejorar win rate
+    - Detecta rangos muy pequeños (consolidación)
+    - Verifica volumen bajo (falta de interés)
+    - Evita trades en mercados laterales
+    """
+    # Rango de precio en las últimas 5 velas
     rango_pct = (df['high'].iloc[-5:].max() - df['low'].iloc[-5:].min()) / df['close'].iloc[-1]
-    vol_avg   = df['volume'].iloc[-100:].mean()
-    vol_now   = df['volume'].iloc[-1]
-    return (rango_pct < umbral_pct) and (vol_now < vol_avg * vol_factor)
+    
+    # Volumen promedio vs volumen actual
+    vol_avg = df['volume'].iloc[-20:].mean()  # Promedio de 20 velas
+    vol_now = df['volume'].iloc[-1]
+    
+    # Volatilidad reciente (últimas 10 velas)
+    volatilidad = df['close'].iloc[-10:].pct_change().std()
+    
+    # Criterios de consolidación MUY LIGHT
+    rango_pequeno = rango_pct < umbral_pct
+    volumen_bajo = vol_now < vol_avg * vol_factor
+    volatilidad_baja = volatilidad < 0.0005  # 0.05% de volatilidad (más permisivo)
+    
+    # Solo evita si hay TODAS las señales de consolidación (más restrictivo)
+    señales_consolidacion = sum([rango_pequeno, volumen_bajo, volatilidad_baja])
+    
+    if señales_consolidacion >= 3:  # TODAS las señales deben estar presentes
+        print(f"🔍 Consolidación detectada: Rango={rango_pct:.4f}, Vol={vol_now/vol_avg:.2f}x, Volat={volatilidad:.4f}")
+        return True
+    
+    return False
 
 
 
@@ -169,32 +196,82 @@ def run_async(coro):
     except RuntimeError:
         asyncio.run(coro)
 
-def generar_senal_ia(df, symbol="BTC/USDT", interval="1m"):
-    df = compute_indicators(df)
-    df = df.copy()
+def classify_candle(row):
+    body  = row['close'] - row['open']
+    upper = row['high']  - max(row['close'], row['open'])
+    lower = min(row['close'], row['open']) - row['low']
 
-    # ✅ asegurarse que symbol e interval sean str
+    if abs(body) < 0.001 * row['open']:
+        return 0              
+    elif body > 0 and upper < body*0.1 and lower < body*0.1:
+        return 1              
+    elif body < 0 and upper < -body*0.1 and lower < -body*0.1:
+        return -1            
+    else:
+        return 2              
+
+def compute_indicators_realtime(df):
+    # Usar la función original de prepare_data.py
+    df = compute_indicators(df)
+    
+    # 🔥 Agregar candle_type EXACTAMENTE como en entrenamiento
+    df['candle_type'] = df.apply(classify_candle, axis=1).astype(np.int8)
+    
+    return df
+
+def generar_senal_ia(df, symbol="BTC/USDT", interval="1m"):
+    print(f"🔍 DEBUG - Iniciando generar_senal_ia para {symbol}")
+    df = compute_indicators_realtime(df)
+    df = df.copy()
+    print(f"🔍 DEBUG - DataFrame después de compute_indicators: {df.shape}")
+
+    
     if isinstance(symbol, list):
         symbol = symbol[0]
     if isinstance(interval, list):
         interval = interval[0]
 
-    # Códigos simbólicos como en entrenamiento
-    symbol_map = {"BTC/USDT": 0, "ETH/USDT": 1, "SOL/USDT": 2, "XRP/USDT": 3}
+    
+    symbol_map = {"BTC/USDT": 0, "ETH/USDT": 1}
     timeframe_map = {"1m": 0, "5m": 1}
 
     df["symbol_code"] = symbol_map.get(symbol, 0)
     df["timeframe_code"] = timeframe_map.get(interval, 0)
+    print(f"🔍 DEBUG - Symbol code: {df['symbol_code'].iloc[-1]}, Timeframe code: {df['timeframe_code'].iloc[-1]}")
 
     cols = config["data"]["features"]
     seq_len = config["data"]["sequence_length"]
+    print(f"🔍 DEBUG - Features requeridos: {len(cols)}, Sequence length: {seq_len}")
 
-    if len(df) < seq_len + 1 or not all(col in df.columns for col in cols):
-        return 0
+    # 🔥 Validación de features faltantes y orden correcto
+    missing = [c for c in cols if c not in df.columns]
+    extra = [c for c in df.columns if c not in cols]
+    if missing:
+        print(f"🚨 ERROR: Faltan features requeridos: {missing}")
+        return 0, 0.0
+    if extra:
+        print(f"⚠️ Features extra detectados: {extra}")
+    
+    # 🔥 Re-ordenar features exactamente como en entrenamiento
+    df = df[cols]
+    print(f"🔍 DEBUG - Features ordenados correctamente: {list(df.columns)}")
 
-    df_feat = normalize(df[cols]).fillna(0)
+    if len(df) < seq_len + 1:
+        print(f"🔍 DEBUG - Error: len(df)={len(df)}, necesitas al menos {seq_len + 1}")
+        return 0, 0.0
+
+    print(f"🔍 DEBUG - DataFrame tiene {len(df)} filas, suficientes features")
+    df_feat = normalize(df).fillna(0)
     x_seq = df_feat.iloc[-seq_len:].values
     x_tensor = torch.tensor(x_seq, dtype=torch.float32).unsqueeze(0).to(device)
+    
+    # 🔍 DEBUG: Mostrar muestra de datos de entrada
+    print(f"🔍 DEBUG - Datos de entrada:")
+    print(f"   Shape: {x_tensor.shape}")
+    print(f"   Primeros 5 valores del primer feature: {x_tensor[0, 0, :5].cpu().numpy()}")
+    print(f"   Últimos 5 valores del último feature: {x_tensor[0, -1, -5:].cpu().numpy()}")
+    print(f"   Rango de valores: [{x_tensor.min().item():.4f}, {x_tensor.max().item():.4f}]")
+    print(f"   Features disponibles: {len(cols)} - {cols[:5]}...")
 
     with torch.no_grad():
         features = feature_extractor(x_tensor)
@@ -202,14 +279,15 @@ def generar_senal_ia(df, symbol="BTC/USDT", interval="1m"):
         context = attention(sequence)
         logits = agent(context)
         prob = torch.sigmoid(logits.squeeze()).item()
+        print(f"🔍 DEBUG - Logits: {logits.squeeze().item():.6f}, Prob: {prob:.6f}")
 
-    fixed_threshold = config['training'].get('fixed_threshold', 0.35)
+    fixed_threshold = config['training'].get('fixed_threshold', 0.32)
     if prob >= fixed_threshold:
-        return 1  
+        return 1, prob
     elif prob <= (1 - fixed_threshold):
-        return -1  
+        return -1, prob
     else:
-        return 0  
+        return 0, prob
 
 
 
@@ -280,36 +358,62 @@ while True:
         process_candles += 1
 
        
+        # 🔄 Selección de activo con rotación inteligente
         if not operations['open'] and volatility_candle_count % VOLATILITY_CICLOS == 0:
             ranking = []
             for sym in SYMBOLS:
                 data = convertir_a_df(bot.fetch_ohlcv(sym, INTERVAL, limit=VOLATILITY_CICLOS))
                 vola = data['close'].pct_change().abs().mean()
-                # Obtener volumen del último candle (liquidez)
                 vol = data['volume'].iloc[-1]
                 score = vola * np.log(vol + 1)
                 ranking.append((score, sym, vola, vol))
             ranking.sort(reverse=True)
-            # filtro volatilidad extrema (opcional, si querés mantenerlo)
-            filtered = [r for r in ranking if r[2] < EXTREME_VOLATILITY_THRESHOLD]
-            if not filtered:
-                filtered = ranking
-            score, symbol, vola, vol = filtered[0]
+            
+            # 🔥 ROTACIÓN INTELIGENTE: Alternar entre BTC y ETH
+            if last_selected_symbol:
+                # Si el último fue ETH, priorizar BTC y viceversa
+                if last_selected_symbol == 'ETH/USDT':
+                    # Priorizar BTC
+                    btc_score = next((r[0] for r in ranking if r[1] == 'BTC/USDT'), 0)
+                    eth_score = next((r[0] for r in ranking if r[1] == 'ETH/USDT'), 0)
+                    if btc_score > eth_score * 0.7:  # Si BTC tiene al menos 70% del score de ETH
+                        symbol = 'BTC/USDT'
+                        score, vola, vol = next((r[0], r[2], r[3]) for r in ranking if r[1] == 'BTC/USDT')
+                    else:
+                        score, symbol, vola, vol = ranking[0][0], ranking[0][1], ranking[0][2], ranking[0][3]
+                else:
+                    # Priorizar ETH
+                    btc_score = next((r[0] for r in ranking if r[1] == 'BTC/USDT'), 0)
+                    eth_score = next((r[0] for r in ranking if r[1] == 'ETH/USDT'), 0)
+                    if eth_score > btc_score * 0.7:  # Si ETH tiene al menos 70% del score de BTC
+                        symbol = 'ETH/USDT'
+                        score, vola, vol = next((r[0], r[2], r[3]) for r in ranking if r[1] == 'ETH/USDT')
+                    else:
+                        score, symbol, vola, vol = ranking[0][0], ranking[0][1], ranking[0][2], ranking[0][3]
+            else:
+                # Primera vez: usar el mejor score
+                score, symbol, vola, vol = ranking[0][0], ranking[0][1], ranking[0][2], ranking[0][3]
+            
+            last_selected_symbol = symbol
             print(f"🔄 Activo seleccionado: {symbol} | Score={score:.6f} | Volatilidad={vola:.4f} | Volumen={vol:.2f}")
+            print(f"📊 Ranking completo: {[(r[1], f'{r[0]:.4f}') for r in ranking]}")
 
         
         ohlcv = bot.fetch_ohlcv(symbol, INTERVAL, limit=100)
         df = convertir_a_df(ohlcv)
         
-        if esta_en_consolidacion(df):
+        # 🔥 Filtro de consolidación LIGHT para mejorar win rate
+        if esta_en_consolidacion(df, umbral_pct=0.0015, vol_factor=0.3):
             print("⏸️ Zona de consolidación detectada. Trade evitado.")
             continue
 
         timer.start("Generación de señal")
-        signal = generar_senal_ia(df, symbol=symbol, interval=INTERVAL)
+        signal, prob = generar_senal_ia(df, symbol=symbol, interval=INTERVAL)
         last = df.iloc[-1]
         ts = last['timestamp']
+        fixed_threshold = config['training'].get('fixed_threshold', 0.35)
         print(f"🧠 Señal IA generada: {signal} (1=buy, -1=sell, 0=hold)")
+        print(f"📊 Confianza: {prob:.4f} | Umbral: {fixed_threshold:.4f} | Diferencia: {abs(prob - 0.5):.4f}")
         timer.stop("Generación de señal")
 
         print(f"\n🕒 {symbol} - Último candle: {ts} | Señal: {signal}")
