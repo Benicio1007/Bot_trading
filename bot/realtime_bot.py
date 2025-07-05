@@ -30,9 +30,6 @@ import torch.nn.functional as F
 from data.prepare_data import compute_indicators
 import ta
 
-
-
-
 # 📌 Configuración
 SYMBOLS = ['BTC/USDT', 'ETH/USDT']  # Lista de activos
 INTERVAL = '1m'
@@ -108,8 +105,6 @@ def esta_en_consolidacion(df, umbral_pct=0.0015, vol_factor=0.3):
     
     return False
 
-
-
 def esperar_internet(reintentos=99999, espera=10):
     for _ in range(reintentos):
         try:
@@ -133,7 +128,6 @@ def guardar_operacion(tipo, activo, entrada, salida, resultado, pnl_neto, comisi
             ts_salida.strftime('%Y-%m-%d %H:%M:%S')
         ])
 
-
 def enviar_informe_mensual():
     ruta_informe = os.path.join(os.path.dirname(__file__), "..", "informe", "informe_mensual.html")
 
@@ -147,9 +141,7 @@ def enviar_informe_mensual():
     fecha_actual = datetime.now().strftime("%B %Y").capitalize()
     asunto = f"📊 Informe mensual de rendimiento - {fecha_actual}"
 
-
     enviar_email(asunto, cuerpo_html)
-
 
 def calcular_cantidad(symbol, usd_value):
     price = bot.fetch_ticker(symbol)['last']
@@ -158,12 +150,10 @@ def calcular_cantidad(symbol, usd_value):
     cantidad = round(usd_value / price, 3)
     return cantidad, price
 
-
 def convertir_a_df(ohlcv):
     df = pd.DataFrame(ohlcv, columns=pd.Index(['timestamp', 'open', 'high', 'low', 'close', 'volume']))
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     return df
-
 
 def hay_evento_economico_cercano_local(now, minutos_antes=15, minutos_despues=30):
     try:
@@ -225,13 +215,11 @@ def generar_senal_ia(df, symbol="BTC/USDT", interval="1m"):
     df = df.copy()
     print(f"🔍 DEBUG - DataFrame después de compute_indicators: {df.shape}")
 
-    
     if isinstance(symbol, list):
         symbol = symbol[0]
     if isinstance(interval, list):
         interval = interval[0]
 
-    
     symbol_map = {"BTC/USDT": 0, "ETH/USDT": 1}
     timeframe_map = {"1m": 0, "5m": 1}
 
@@ -289,8 +277,6 @@ def generar_senal_ia(df, symbol="BTC/USDT", interval="1m"):
     else:
         return 0, prob
 
-
-
 device = torch.device(config['training']['device'])
 
 feature_extractor = CNNFeatureExtractor(config).to(device)
@@ -313,19 +299,15 @@ process_candles = 0
 last_bar_time = None
 volatility_candle_count = 0
 
-
 esperar_internet()
 timer = Timer()
-
 
 telegram_bot.operations = operations
 telegram_bot.metrics = metrics
 telegram_bot.capital_actual_func = lambda: bot.get_balance()
 asyncio.run(telegram_bot.run_telegram_bot())
 
-
 while True:
-
     if telegram_bot.bot_pausado:
         print("⏸️ Bot pausado por Telegram...")
         while telegram_bot.bot_pausado:
@@ -353,11 +335,9 @@ while True:
         print("✅ Bot reanudado.")
         continue
 
-    
     try:
         process_candles += 1
 
-       
         # 🔄 Selección de activo con rotación inteligente
         if not operations['open'] and volatility_candle_count % VOLATILITY_CICLOS == 0:
             ranking = []
@@ -398,50 +378,24 @@ while True:
             print(f"🔄 Activo seleccionado: {symbol} | Score={score:.6f} | Volatilidad={vola:.4f} | Volumen={vol:.2f}")
             print(f"📊 Ranking completo: {[(r[1], f'{r[0]:.4f}') for r in ranking]}")
 
-        
+        # 🔥 Obtener datos del símbolo actual
         ohlcv = bot.fetch_ohlcv(symbol, INTERVAL, limit=100)
         df = convertir_a_df(ohlcv)
         
         # 🔥 Filtro de consolidación LIGHT para mejorar win rate
-        if esta_en_consolidacion(df, umbral_pct=0.0015, vol_factor=0.3):
-            print("⏸️ Zona de consolidación detectada. Trade evitado.")
-            continue
+        # 🔥 SOLO aplicar si NO hay operación abierta
+        consolidation_detected = False
+        if not operations['open']:
+            consolidation_detected = esta_en_consolidacion(df, umbral_pct=0.0015, vol_factor=0.3)
+            if consolidation_detected:
+                print("⏸️ Zona de consolidación detectada. Trade evitado.")
 
-        timer.start("Generación de señal")
-        signal, prob = generar_senal_ia(df, symbol=symbol, interval=INTERVAL)
-        last = df.iloc[-1]
-        ts = last['timestamp']
-        fixed_threshold = config['training'].get('fixed_threshold', 0.35)
-        print(f"🧠 Señal IA generada: {signal} (1=buy, -1=sell, 0=hold)")
-        print(f"📊 Confianza: {prob:.4f} | Umbral: {fixed_threshold:.4f} | Diferencia: {abs(prob - 0.5):.4f}")
-        timer.stop("Generación de señal")
-
-        print(f"\n🕒 {symbol} - Último candle: {ts} | Señal: {signal}")
-
-        
-        ticker = bot.fetch_ticker(symbol)
-        ask = ticker.get('ask')
-        bid = ticker.get('bid')
-        volume = df['volume'].iloc[-1]
-        if ask is None or bid is None or bid == 0:
-            print("⚠️ Datos de ticker incompletos, omitiendo validación de spread.")
-            safe = False
-        else:
-            spread = abs(ask - bid) / bid
-            safe = (spread < SAFE_MODE_VALIDATIONS['max_spread'] and volume > SAFE_MODE_VALIDATIONS['min_volume'])
-        print(f"🔍 Spread={'N/A' if ask is None or bid is None else f'{spread:.4f}'}, Volumen={volume:.2f}, SafeMode={'OK' if safe else '🚨'}")
-        if spread > SAFE_MODE_VALIDATIONS['max_spread']:
-            print(f"⚠️ Spread alto: {spread} > {SAFE_MODE_VALIDATIONS['max_spread']}")
-        if volume < SAFE_MODE_VALIDATIONS['min_volume']:
-            print(f"⚠️ Volumen bajo: {volume} < {SAFE_MODE_VALIDATIONS['min_volume']}")
-
-        
-
-        
+        # 🔥 SIEMPRE revisar operaciones abiertas, independientemente de consolidación
         ticker = bot.fetch_ticker(symbol)  
         current = ticker.get('last')
-        candle_ts = last['timestamp']  # Debe venir de df = strategy.generate_signals(df)
+        candle_ts = df.iloc[-1]['timestamp']
         candle_dt = candle_ts.to_pydatetime()
+        
         if operations['open']:
             if last_bar_time is None:
                 last_bar_time = candle_dt
@@ -463,7 +417,7 @@ while True:
                 close_position = False
                 ts_exit = datetime.now()
                 
-                if operations['side'] == 'long':
+                if operations['side'] == 'buy':  # 🔥 Corregido: era 'long', debe ser 'buy'
                     volatilidad = df['close'].pct_change().std()  # desviación estándar reciente
                     TP_dinamico = min(0.01, max(0.003, volatilidad * 3))
                     SL_dinamico = min(0.007, max(0.002, volatilidad * 2))
@@ -482,12 +436,12 @@ while True:
                         reason = 'Stop Loss alcanzado 🛑'
                         res = 'PÉRDIDA'
                         
-                elif operations['side'] == 'short':
+                elif operations['side'] == 'sell':  # 🔥 Corregido: era 'short', debe ser 'sell'
                     volatilidad = df['close'].pct_change().std()  # desviación estándar reciente
                     TP_dinamico = min(0.01, max(0.003, volatilidad * 3))
                     SL_dinamico = min(0.007, max(0.002, volatilidad * 2))
-                    tp_price = operations['entry_price'] * (1 + TP_dinamico)
-                    sl_price = operations['entry_price'] * (1 - SL_dinamico)
+                    tp_price = operations['entry_price'] * (1 - TP_dinamico)  # 🔥 Corregido: para sell, TP es menor
+                    sl_price = operations['entry_price'] * (1 + SL_dinamico)   # 🔥 Corregido: para sell, SL es mayor
                     
                     print(f"SHORT ▶ Precio actual: {current:.4f} | TP: {tp_price:.4f} | SL: {sl_price:.4f}")
                     
@@ -516,8 +470,6 @@ while True:
                         riesgo_actual = max(riesgo_actual - 0.05, riesgo_minimo)
                         print(f"📉 Reduciendo riesgo a {riesgo_actual*100:.0f}% por pérdida.")
                     
-                    
-                   
                     run_async(telegram_bot.notificar_operacion_cerrada(operations, current, pnl, com_entrada, com_salida, res, ts_exit))
                     guardar_operacion(
                     operations['side'], operations['symbol'], operations['entry_price'], current,
@@ -536,59 +488,86 @@ while True:
                     except Exception as e:
                         print(f"❌ Error al subir a Sheets: {e}")
         
-            
+        # 🔥 Solo generar señales si NO hay consolidación y NO hay operación abierta
+        if not consolidation_detected and not operations['open']:
+            timer.start("Generación de señal")
+            signal, prob = generar_senal_ia(df, symbol=symbol, interval=INTERVAL)
+            last = df.iloc[-1]
+            ts = last['timestamp']
+            fixed_threshold = config['training'].get('fixed_threshold', 0.35)
+            print(f"🧠 Señal IA generada: {signal} (1=buy, -1=sell, 0=hold)")
+            print(f"📊 Confianza: {prob:.4f} | Umbral: {fixed_threshold:.4f} | Diferencia: {abs(prob - 0.5):.4f}")
+            timer.stop("Generación de señal")
 
-        
-        if not operations['open'] and signal in [1,-1] and safe and not hay_evento_economico_cercano_local(now_utc,15,30):
-            side = 'buy' if signal==1 else 'sell'
-            riesgo_actual = POSITION_RATIO * (1 - min(bot.get_drawdown(), 0.5))
-            capital = CAPITAL_TOTAL * riesgo_actual
-            qty = round((capital * LEVERAGE) / df['close'].iloc[-1], 3)
-            price = df['close'].iloc[-1]
-            if qty*price >= MIN_NOTIONAL:
-                timer.start("Ejecución de orden")
-                spread_pct = (ask - bid) / bid * 100 if bid else None
-                order = None
-                order_price = None
-                if spread_pct is not None and spread_pct > 0.02:
-                    # Orden limit/post-only
-                    order_price = ask if side == 'buy' else bid
-                    order = bot.place_order(symbol, side, qty, price=order_price, order_type='limit')
-                    print(f"📝 Orden LIMIT enviada: {side} {qty} {symbol} @ {order_price:.4f} (spread {spread_pct:.4f}%)")
-                else:
-                    # Orden de mercado
-                    order = bot.place_order(symbol, side, qty, order_type='market')
-                    print(f"📝 Orden MARKET enviada: {side} {qty} {symbol} (spread {spread_pct:.4f}%)")
+            print(f"\n🕒 {symbol} - Último candle: {ts} | Señal: {signal}")
 
-                # Loguear después de la ejecución
-                if order:
-                    executed_price = order.get('price', order_price if order_price is not None else price)
-                    fee = executed_price * qty * COMISION_PORCENTAJE if executed_price else None
-                    funding = 0  # Simulado o real si tienes acceso
-                    print(f"✅ Ejecutado: {side} {qty} {symbol} @ {executed_price} | Fee: {fee:.4f} | Funding: {funding:.4f}")
-
-                timer.start("Notificación Telegram")
-                run_async(telegram_bot.notificar_operacion_abierta(symbol, side, qty, price))
-                timer.stop("Notificación Telegram")
-
-                if metrics['total_trades'] > 5:
-                    asyncio.run(telegram_bot.enviar_mensaje_inicio(telegram_bot.AUTHORIZED_USER_ID))
-
-                operations.update({'open':True,'symbol':symbol,'entry_price':price,
-                                  'side':side,'qty':qty,'ts_entry':datetime.now(),'candles':0, 'last_candle_ts': ts})
-                print(f"🚨 Entrada {side} en {symbol} @ {price} Qty={qty}")
+            ticker = bot.fetch_ticker(symbol)
+            ask = ticker.get('ask')
+            bid = ticker.get('bid')
+            volume = df['volume'].iloc[-1]
+            if ask is None or bid is None or bid == 0:
+                print("⚠️ Datos de ticker incompletos, omitiendo validación de spread.")
+                safe = False
             else:
-                print(f"⚠️ Notional insuficiente para abrir: {qty*price:.2f}")
+                spread = abs(ask - bid) / bid
+                safe = (spread < SAFE_MODE_VALIDATIONS['max_spread'] and volume > SAFE_MODE_VALIDATIONS['min_volume'])
+            print(f"🔍 Spread={'N/A' if ask is None or bid is None else f'{spread:.4f}'}, Volumen={volume:.2f}, SafeMode={'OK' if safe else '🚨'}")
+            if spread > SAFE_MODE_VALIDATIONS['max_spread']:
+                print(f"⚠️ Spread alto: {spread} > {SAFE_MODE_VALIDATIONS['max_spread']}")
+            if volume < SAFE_MODE_VALIDATIONS['min_volume']:
+                print(f"⚠️ Volumen bajo: {volume} < {SAFE_MODE_VALIDATIONS['min_volume']}")
 
+            # 🔥 Solo abrir nuevas operaciones si no hay consolidación
+            if signal in [1,-1] and safe and not hay_evento_economico_cercano_local(now_utc,15,30):
+                side = 'buy' if signal==1 else 'sell'
+                riesgo_actual = POSITION_RATIO * (1 - min(bot.get_drawdown(), 0.5))
+                capital = CAPITAL_TOTAL * riesgo_actual
+                qty = round((capital * LEVERAGE) / df['close'].iloc[-1], 3)
+                price = df['close'].iloc[-1]
+                if qty*price >= MIN_NOTIONAL:
+                    timer.start("Ejecución de orden")
+                    spread_pct = (ask - bid) / bid * 100 if bid else None
+                    order = None
+                    order_price = None
+                    if spread_pct is not None and spread_pct > 0.02:
+                        # Orden limit/post-only
+                        order_price = ask if side == 'buy' else bid
+                        order = bot.place_order(symbol, side, qty, price=order_price, order_type='limit')
+                        print(f"📝 Orden LIMIT enviada: {side} {qty} {symbol} @ {order_price:.4f} (spread {spread_pct:.4f}%)")
+                    else:
+                        # Orden de mercado
+                        order = bot.place_order(symbol, side, qty, order_type='market')
+                        print(f"📝 Orden MARKET enviada: {side} {qty} {symbol} (spread {spread_pct:.4f}%)")
+
+                    # Loguear después de la ejecución
+                    if order:
+                        executed_price = order.get('price', order_price if order_price is not None else price)
+                        fee = executed_price * qty * COMISION_PORCENTAJE if executed_price else None
+                        funding = 0  # Simulado o real si tienes acceso
+                        print(f"✅ Ejecutado: {side} {qty} {symbol} @ {executed_price} | Fee: {fee:.4f} | Funding: {funding:.4f}")
+
+                    timer.start("Notificación Telegram")
+                    run_async(telegram_bot.notificar_operacion_abierta(symbol, side, qty, price))
+                    timer.stop("Notificación Telegram")
+
+                    if metrics['total_trades'] > 5:
+                        asyncio.run(telegram_bot.enviar_mensaje_inicio(telegram_bot.AUTHORIZED_USER_ID))
+
+                    operations.update({'open':True,'symbol':symbol,'entry_price':price,
+                                      'side':side,'qty':qty,'ts_entry':datetime.now(),'candles':0, 'last_candle_ts': ts})
+                    print(f"🚨 Entrada {side} en {symbol} @ {price} Qty={qty}")
+                else:
+                    print(f"⚠️ Notional insuficiente para abrir: {qty*price:.2f}")
+        
+        # 🔥 Actualizar contador de volatilidad
+        volatility_candle_count += 1
         
         if metrics['total_trades']>0:
             win_rate = metrics['wins']/metrics['total_trades']*100
             avg_pnl = metrics['pnl_sum']/metrics['total_trades']
             print(f"📊 Trades:{metrics['total_trades']} | Winrate:{win_rate:.2f}% | AvgPnL:{avg_pnl:.2f}")
 
-         
         time.sleep(10)
-
 
         if drawdown_actual >= 0.25:
             print(f"🚩 Drawdown crítico alcanzado: {drawdown_actual*100:.2f}% (Balance: {capital_actual:.2f} USD)")
@@ -601,7 +580,4 @@ while True:
         break
     except Exception as e:
         print(f"❌ Error general: {e}")
-        time.sleep(10)
-
-
-    
+        time.sleep(10) 
